@@ -1,0 +1,1117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dev Todo Dashboard</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg: #0f172a;
+      --surface: #1e293b;
+      --surface-hover: #263548;
+      --surface2: #334155;
+      --border: #334155;
+      --border-light: #475569;
+      --text: #e2e8f0;
+      --text-muted: #94a3b8;
+      --text-subtle: #64748b;
+      --jira-blue: #2684ff;
+      --jira-bg: rgba(38,132,255,0.12);
+      --gitlab-orange: #fc6d26;
+      --gitlab-bg: rgba(252,109,38,0.12);
+      --local-green: #10b981;
+      --local-bg: rgba(16,185,129,0.12);
+      --red: #f87171;
+      --yellow: #fbbf24;
+      --radius: 10px;
+      --radius-sm: 6px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    .header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+      height: 54px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .logo { font-size: 17px; font-weight: 700; letter-spacing: -0.3px; }
+    .logo span { color: var(--jira-blue); }
+
+    .header-actions { display: flex; align-items: center; gap: 6px; }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 6px 11px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-light);
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 13px;
+      font-family: inherit;
+      transition: background 0.12s, border-color 0.12s;
+      white-space: nowrap;
+    }
+    .btn:hover { background: var(--surface2); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: var(--jira-blue); border-color: var(--jira-blue); color: #fff; }
+    .btn-primary:hover { background: #1a6fd4; border-color: #1a6fd4; }
+    .btn-sm { padding: 4px 8px; font-size: 12px; }
+    .btn-icon { padding: 6px 8px; }
+    .btn-danger { color: var(--red); border-color: transparent; background: transparent; }
+    .btn-danger:hover { background: rgba(248,113,113,0.1); border-color: var(--red); }
+
+    /* ── Layout ── */
+    .main { padding: 20px 24px; max-width: 1680px; margin: 0 auto; }
+
+    .columns {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 18px;
+      align-items: start;
+    }
+    @media (max-width: 1100px) { .columns { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 680px)  { .columns { grid-template-columns: 1fr; } }
+
+    /* ── Section ── */
+    .section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .section-header {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .section-icon {
+      width: 22px;
+      height: 22px;
+      border-radius: 5px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 800;
+      flex-shrink: 0;
+      letter-spacing: -0.5px;
+    }
+    .section-icon.jira   { background: var(--jira-bg);   color: var(--jira-blue);    }
+    .section-icon.gitlab { background: var(--gitlab-bg); color: var(--gitlab-orange);}
+    .section-icon.local  { background: var(--local-bg);  color: var(--local-green);  }
+
+    .section-count {
+      background: var(--surface2);
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 10px;
+      min-width: 20px;
+      text-align: center;
+    }
+
+    /* ── Options bar ── */
+    .options-bar {
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.015);
+    }
+
+    .checkbox-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--text-muted);
+      user-select: none;
+    }
+    .checkbox-label input[type="checkbox"] { width: 13px; height: 13px; cursor: pointer; accent-color: var(--jira-blue); }
+    .checkbox-label:hover { color: var(--text); }
+
+    /* ── Section divider ── */
+    .section-divider {
+      padding: 6px 14px;
+      background: rgba(255,255,255,0.015);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .divider-label {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.7px;
+      color: var(--text-subtle);
+      white-space: nowrap;
+    }
+    .divider-line { flex: 1; height: 1px; background: var(--border); }
+
+    /* ── Items ── */
+    .item {
+      padding: 11px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 9px;
+      align-items: flex-start;
+      transition: background 0.1s;
+      text-decoration: none;
+      color: inherit;
+      cursor: pointer;
+    }
+    .item:last-child { border-bottom: none; }
+    .item:hover { background: var(--surface-hover); }
+
+    .item-icon { flex-shrink: 0; font-size: 14px; margin-top: 1px; line-height: 1; }
+
+    .priority-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      margin-top: 6px;
+    }
+    .priority-highest { background: #ef4444; }
+    .priority-high    { background: #f97316; }
+    .priority-medium  { background: #eab308; }
+    .priority-low     { background: #3b82f6; }
+    .priority-lowest  { background: #64748b; }
+
+    .item-content { flex: 1; min-width: 0; }
+    .item-title {
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      line-height: 1.35;
+    }
+    .item-meta {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      margin-top: 4px;
+      flex-wrap: wrap;
+    }
+    .item-key {
+      font-size: 11px;
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    /* ── Badges ── */
+    .badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.2px;
+    }
+    .badge-blue   { background: rgba(38,132,255,0.15); color: var(--jira-blue); }
+    .badge-orange { background: rgba(252,109,38,0.15); color: var(--gitlab-orange); }
+    .badge-green  { background: rgba(16,185,129,0.15); color: var(--local-green); }
+    .badge-red    { background: rgba(248,113,113,0.15); color: var(--red); }
+    .badge-yellow { background: rgba(251,191,36,0.15); color: var(--yellow); }
+    .badge-purple { background: rgba(167,139,250,0.15); color: #a78bfa; }
+    .badge-gray   { background: rgba(148,163,184,0.12); color: var(--text-muted); }
+
+    .mr-role { font-size: 10px; padding: 1px 5px; border-radius: 3px; font-weight: 700; }
+    .mr-role-author   { background: rgba(38,132,255,0.15); color: var(--jira-blue); }
+    .mr-role-reviewer { background: rgba(167,139,250,0.15); color: #a78bfa; }
+
+    .item-actions { display: flex; gap: 3px; flex-shrink: 0; opacity: 0; transition: opacity 0.1s; }
+    .item:hover .item-actions,
+    .local-item:hover .item-actions { opacity: 1; }
+
+    /* ── States ── */
+    .loading {
+      padding: 32px 16px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+    .spinner {
+      display: inline-block;
+      width: 18px;
+      height: 18px;
+      border: 2px solid var(--border-light);
+      border-top-color: var(--jira-blue);
+      border-radius: 50%;
+      animation: spin 0.65s linear infinite;
+      margin-bottom: 8px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .empty {
+      padding: 28px 16px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+    .empty-icon { font-size: 26px; margin-bottom: 6px; display: block; }
+
+    .error-state {
+      margin: 10px;
+      padding: 12px 14px;
+      background: rgba(248,113,113,0.08);
+      border: 1px solid rgba(248,113,113,0.25);
+      border-radius: var(--radius-sm);
+      color: var(--red);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .config-needed {
+      padding: 28px 16px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+    .config-needed p { margin-top: 5px; font-size: 12px; color: var(--text-subtle); }
+
+    /* ── Local Todos ── */
+    .add-todo {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 7px;
+    }
+    .add-todo input {
+      flex: 1;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 6px 10px;
+      color: var(--text);
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .add-todo input:focus { border-color: var(--local-green); }
+    .add-todo input::placeholder { color: var(--text-subtle); }
+
+    .local-item {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: flex-start;
+      gap: 9px;
+      transition: background 0.1s;
+    }
+    .local-item:last-child { border-bottom: none; }
+    .local-item:hover { background: var(--surface-hover); }
+    .local-item.done .local-title { text-decoration: line-through; color: var(--text-subtle); }
+
+    .item-check { flex-shrink: 0; margin-top: 1px; }
+    .item-check input[type="checkbox"] { width: 14px; height: 14px; cursor: pointer; accent-color: var(--local-green); }
+
+    .local-content { flex: 1; min-width: 0; }
+    .local-title { font-size: 13px; line-height: 1.4; word-break: break-word; }
+    .local-date { font-size: 11px; color: var(--text-subtle); margin-top: 3px; }
+
+    /* ── Settings Modal ── */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.72);
+      z-index: 200;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .modal-overlay.hidden { display: none; }
+
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius);
+      width: 100%;
+      max-width: 540px;
+      max-height: 90vh;
+      overflow-y: auto;
+      box-shadow: 0 24px 64px rgba(0,0,0,0.55);
+    }
+
+    .modal-header {
+      padding: 16px 18px 13px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .modal-title { font-size: 15px; font-weight: 600; }
+    .modal-close {
+      width: 26px; height: 26px;
+      display: flex; align-items: center; justify-content: center;
+      border: none; background: transparent; color: var(--text-muted);
+      cursor: pointer; border-radius: 5px; font-size: 14px; transition: background 0.12s;
+    }
+    .modal-close:hover { background: var(--surface2); color: var(--text); }
+
+    .modal-body { padding: 18px; }
+
+    .modal-tabs {
+      display: flex;
+      gap: 2px;
+      background: var(--bg);
+      padding: 3px;
+      border-radius: var(--radius-sm);
+      margin-bottom: 18px;
+    }
+    .modal-tab {
+      flex: 1; padding: 7px 10px;
+      border: none; background: transparent; color: var(--text-muted);
+      cursor: pointer; border-radius: 4px; font-size: 13px; font-weight: 500;
+      transition: all 0.12s; font-family: inherit;
+    }
+    .modal-tab.active { background: var(--surface2); color: var(--text); }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    .form-group { margin-bottom: 14px; }
+    .form-label {
+      display: block;
+      font-size: 11px; font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: 0.5px;
+      margin-bottom: 5px;
+    }
+    .form-input {
+      width: 100%;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 8px 11px; color: var(--text); font-size: 13px;
+      font-family: inherit; outline: none; transition: border-color 0.15s;
+    }
+    .form-input:focus { border-color: var(--jira-blue); }
+    .form-input::placeholder { color: var(--text-subtle); }
+    .form-hint { font-size: 11px; color: var(--text-subtle); margin-top: 4px; line-height: 1.45; }
+    .form-hint a { color: var(--jira-blue); }
+
+    .form-section {
+      margin-top: 14px; padding-top: 14px;
+      border-top: 1px solid var(--border);
+    }
+    .form-section-title {
+      font-size: 11px; font-weight: 700;
+      color: var(--text-muted); text-transform: uppercase;
+      letter-spacing: 0.5px; margin-bottom: 12px;
+    }
+
+    .security-notice {
+      display: flex; gap: 8px; align-items: flex-start;
+      padding: 10px 12px;
+      background: rgba(251,191,36,0.07);
+      border: 1px solid rgba(251,191,36,0.22);
+      border-radius: var(--radius-sm);
+      margin-bottom: 16px;
+      font-size: 11.5px;
+      color: var(--yellow);
+      line-height: 1.5;
+    }
+
+    .modal-footer {
+      padding: 13px 18px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: flex-end;
+      gap: 7px;
+    }
+  </style>
+</head>
+<body>
+
+<header class="header">
+  <div class="logo">Dev<span>Todo</span></div>
+  <div class="header-actions">
+    <button class="btn btn-icon" id="refreshAll" title="Refresh Jira & GitLab">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" id="refreshIcon">
+        <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
+        <path d="M21 3v5h-5"/>
+        <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>
+        <path d="M8 16H3v5"/>
+      </svg>
+      Refresh
+    </button>
+    <button class="btn btn-icon" id="openSettings">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+      Settings
+    </button>
+  </div>
+</header>
+
+<main class="main">
+  <div class="columns">
+
+    <!-- ── Jira ── -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title">
+          <div class="section-icon jira">J</div>
+          Jira Issues
+          <span class="section-count" id="jiraCount">–</span>
+        </div>
+        <button class="btn btn-sm btn-icon" id="refreshJira" title="Refresh Jira">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
+            <path d="M21 3v5h-5"/>
+            <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>
+            <path d="M8 16H3v5"/>
+          </svg>
+        </button>
+      </div>
+      <div class="options-bar">
+        <label class="checkbox-label">
+          <input type="checkbox" id="showUnassigned">
+          Show unassigned internal support tickets
+        </label>
+      </div>
+      <div id="jiraBody" class="section-body">
+        <div class="config-needed">⚙️ Configure Jira in Settings<p>Add your Jira URL and API credentials to get started.</p></div>
+      </div>
+    </div>
+
+    <!-- ── GitLab ── -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title">
+          <div class="section-icon gitlab">GL</div>
+          GitLab MRs
+          <span class="section-count" id="gitlabCount">–</span>
+        </div>
+        <button class="btn btn-sm btn-icon" id="refreshGitlab" title="Refresh GitLab">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
+            <path d="M21 3v5h-5"/>
+            <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>
+            <path d="M8 16H3v5"/>
+          </svg>
+        </button>
+      </div>
+      <div id="gitlabBody" class="section-body">
+        <div class="config-needed">⚙️ Configure GitLab in Settings<p>Add your GitLab URL and personal access token to get started.</p></div>
+      </div>
+    </div>
+
+    <!-- ── Local Todos ── -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title">
+          <div class="section-icon local">✓</div>
+          Local Todos
+          <span class="section-count" id="localCount">0</span>
+        </div>
+        <button class="btn btn-sm btn-danger" id="clearDone">Clear done</button>
+      </div>
+      <div class="add-todo">
+        <input type="text" id="todoInput" placeholder="Add a todo… press Enter" maxlength="500" autocomplete="off">
+        <button class="btn btn-primary btn-sm" id="addTodoBtn">Add</button>
+      </div>
+      <div id="localBody" class="section-body">
+        <div class="empty"><span class="empty-icon">📋</span>No todos yet</div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<!-- ── Settings Modal ── -->
+<div class="modal-overlay hidden" id="settingsModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal-header">
+      <div class="modal-title" id="modalTitle">Settings</div>
+      <button class="modal-close" id="closeSettings" aria-label="Close settings">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="security-notice">
+        ⚠️&nbsp; API tokens are stored in browser <strong>localStorage</strong>. Only use this dashboard on personal, trusted devices.
+      </div>
+      <div class="modal-tabs">
+        <button class="modal-tab active" data-tab="jira">Jira</button>
+        <button class="modal-tab" data-tab="gitlab">GitLab</button>
+      </div>
+
+      <!-- Jira tab -->
+      <div class="tab-content active" id="tab-jira">
+        <div class="form-group">
+          <label class="form-label" for="s-jira-url">Jira Base URL</label>
+          <input class="form-input" id="s-jira-url" type="url" placeholder="https://yourcompany.atlassian.net">
+          <div class="form-hint">Cloud instance URL — no trailing slash</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="s-jira-email">Email</label>
+          <input class="form-input" id="s-jira-email" type="email" placeholder="you@company.com">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="s-jira-token">API Token</label>
+          <input class="form-input" id="s-jira-token" type="password" placeholder="Your Jira API token">
+          <div class="form-hint">Create one at <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener">id.atlassian.com → API tokens</a></div>
+        </div>
+        <div class="form-section">
+          <div class="form-section-title">Internal Support (optional)</div>
+          <div class="form-group">
+            <label class="form-label" for="s-jira-support">Support Project Key</label>
+            <input class="form-input" id="s-jira-support" placeholder="e.g. SUP or ITSUPPORT">
+            <div class="form-hint">Project key to fetch unassigned "to-do" tickets from (enables the checkbox option)</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="s-jira-support-status">Support "To Do" Status Name</label>
+            <input class="form-input" id="s-jira-support-status" placeholder="To Do">
+            <div class="form-hint">Exact status name used for unstarted tickets in your support project</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- GitLab tab -->
+      <div class="tab-content" id="tab-gitlab">
+        <div class="form-group">
+          <label class="form-label" for="s-gitlab-url">GitLab URL</label>
+          <input class="form-input" id="s-gitlab-url" type="url" placeholder="https://gitlab.com">
+          <div class="form-hint">Self-hosted or gitlab.com — no trailing slash</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="s-gitlab-username">Username</label>
+          <input class="form-input" id="s-gitlab-username" placeholder="your_gitlab_username">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="s-gitlab-token">Personal Access Token</label>
+          <input class="form-input" id="s-gitlab-token" type="password" placeholder="glpat-xxxxxxxxxxxxxxxxxxxx">
+          <div class="form-hint">GitLab → User Settings → Access Tokens — needs <code>read_api</code> scope</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" id="cancelSettings">Cancel</button>
+      <button class="btn btn-primary" id="saveSettings">Save &amp; Refresh</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ── Storage keys ──────────────────────────────────────────
+  const KEY_SETTINGS     = 'devtodo_settings';
+  const KEY_TODOS        = 'devtodo_todos';
+  const KEY_UNASSIGNED   = 'devtodo_show_unassigned';
+
+  // ── Default settings ──────────────────────────────────────
+  const DEFAULT = {
+    jira:   { url: '', email: '', token: '', supportProject: '', supportStatus: 'To Do' },
+    gitlab: { url: 'https://gitlab.com', username: '', token: '' },
+  };
+
+  // ── State ─────────────────────────────────────────────────
+  let settings      = loadSettings();
+  let localTodos    = loadTodos();
+  let showUnassigned = localStorage.getItem(KEY_UNASSIGNED) === 'true';
+
+  // ── Helpers ───────────────────────────────────────────────
+  function loadSettings() {
+    try {
+      const raw = localStorage.getItem(KEY_SETTINGS);
+      if (!raw) return deepClone(DEFAULT);
+      const parsed = JSON.parse(raw);
+      return {
+        jira:   { ...deepClone(DEFAULT.jira),   ...parsed.jira   },
+        gitlab: { ...deepClone(DEFAULT.gitlab), ...parsed.gitlab },
+      };
+    } catch { return deepClone(DEFAULT); }
+  }
+
+  function saveSettings(s) { localStorage.setItem(KEY_SETTINGS, JSON.stringify(s)); }
+
+  function loadTodos() {
+    try { return JSON.parse(localStorage.getItem(KEY_TODOS) || '[]'); }
+    catch { return []; }
+  }
+
+  function saveTodos() { localStorage.setItem(KEY_TODOS, JSON.stringify(localTodos)); }
+
+  function deepClone(obj) { return JSON.parse(JSON.stringify(obj)); }
+
+  /** Sanitise a string for safe innerHTML insertion */
+  function esc(str) {
+    return String(str ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function $id(id) { return document.getElementById(id); }
+
+  // ── Jira ──────────────────────────────────────────────────
+  async function jiraFetch(jql) {
+    const { url, email, token } = settings.jira;
+    const auth   = btoa(`${email}:${token}`);
+    const query  = `jql=${encodeURIComponent(jql)}&fields=summary,status,issuetype,priority&maxResults=100`;
+    const resp   = await fetch(`/proxy/jira/rest/api/3/search/jql?${query}`, {
+      headers: {
+        'X-Jira-Auth': `Basic ${auth}`,
+        'X-Jira-Base': url.replace(/\/+$/, ''),
+      },
+    });
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => '');
+      throw new Error(`Jira ${resp.status}: ${resp.statusText}${body ? ' — ' + body.slice(0, 120) : ''}`);
+    }
+    const data = await resp.json();
+    return data.issues || [];
+  }
+
+  async function fetchMyJiraIssues() {
+    const jql = `assignee = currentUser() AND issuetype in (Bug, Story, Task) AND statusCategory != Done ORDER BY updated DESC`;
+    return jiraFetch(jql);
+  }
+
+  async function fetchSupportTickets() {
+    const { supportProject, supportStatus } = settings.jira;
+    if (!supportProject) return [];
+    const status = supportStatus || 'To Do';
+    const jql = `project = "${supportProject}" AND status = "${status}" AND assignee is EMPTY ORDER BY created ASC`;
+    return jiraFetch(jql);
+  }
+
+  function issueTypeIcon(name) {
+    const n = (name || '').toLowerCase();
+    if (n.includes('bug'))     return '🐛';
+    if (n.includes('story'))   return '📗';
+    if (n.includes('epic'))    return '⚡';
+    if (n.includes('subtask')) return '↳';
+    if (n.includes('task'))    return '📋';
+    return '📌';
+  }
+
+  function priorityClass(name) {
+    const p = (name || '').toLowerCase();
+    if (['highest','critical','blocker'].includes(p)) return 'priority-highest';
+    if (p === 'high')   return 'priority-high';
+    if (p === 'medium') return 'priority-medium';
+    if (p === 'low')    return 'priority-low';
+    return 'priority-lowest';
+  }
+
+  function statusBadgeClass(catName) {
+    const c = (catName || '').toLowerCase();
+    if (c === 'done')                    return 'badge-green';
+    if (c === 'in progress' || c === 'indeterminate') return 'badge-blue';
+    return 'badge-gray';
+  }
+
+  function buildJiraItem(issue, isSupport) {
+    const { key, fields } = issue;
+    const title     = fields.summary || '(no title)';
+    const status    = fields.status?.name || '';
+    const statusCat = fields.status?.statusCategory?.name || '';
+    const typeName  = fields.issuetype?.name || 'Task';
+    const priority  = fields.priority?.name || '';
+    const baseUrl   = settings.jira.url.replace(/\/+$/, '');
+
+    const a = document.createElement('a');
+    a.href   = `${baseUrl}/browse/${key}`;
+    a.target = '_blank';
+    a.rel    = 'noopener noreferrer';
+    a.className = 'item';
+    a.innerHTML = `
+      <div class="priority-dot ${priorityClass(priority)}" title="Priority: ${esc(priority)}"></div>
+      <div class="item-icon">${issueTypeIcon(typeName)}</div>
+      <div class="item-content">
+        <div class="item-title" title="${esc(title)}">${esc(title)}</div>
+        <div class="item-meta">
+          <span class="item-key">${esc(key)}</span>
+          <span class="badge ${statusBadgeClass(statusCat)}">${esc(status)}</span>
+          <span class="badge badge-gray">${esc(typeName)}</span>
+          ${isSupport ? '<span class="badge badge-yellow">Support</span>' : ''}
+        </div>
+      </div>`;
+    return a;
+  }
+
+  function divider(label) {
+    const d = document.createElement('div');
+    d.className = 'section-divider';
+    d.innerHTML = `<span class="divider-label">${esc(label)}</span><div class="divider-line"></div>`;
+    return d;
+  }
+
+  async function loadJira() {
+    const body     = $id('jiraBody');
+    const countEl  = $id('jiraCount');
+    const { url, email, token } = settings.jira;
+
+    if (location.protocol === 'file:') {
+      body.innerHTML = `<div class="error-state">⚠️ <strong>Open via a local web server, not directly from disk.</strong><br><br>Run <code>serve.bat</code> in the project folder, then open <a href="http://localhost:8080" style="color:var(--jira-blue)">http://localhost:8080</a> in your browser.<br><br>Jira Cloud blocks requests from <code>file://</code> origins.</div>`;
+      countEl.textContent = '!';
+      return;
+    }
+
+    if (!url || !email || !token) {
+      body.innerHTML = `<div class="config-needed">⚙️ Configure Jira in Settings<p>Add your Jira URL and API credentials to get started.</p></div>`;
+      countEl.textContent = '–';
+      return;
+    }
+
+    body.innerHTML = `<div class="loading"><div class="spinner"></div><br>Loading Jira issues…</div>`;
+    $id('refreshJira').disabled = true;
+
+    try {
+      const [myIssues, supportIssues] = await Promise.all([
+        fetchMyJiraIssues(),
+        showUnassigned ? fetchSupportTickets() : Promise.resolve([]),
+      ]);
+
+      body.innerHTML = '';
+
+      if (myIssues.length === 0 && supportIssues.length === 0) {
+        body.innerHTML = `<div class="empty"><span class="empty-icon">🎉</span>All caught up — no open issues!</div>`;
+      } else {
+        if (myIssues.length) {
+          body.appendChild(divider(`My Issues (${myIssues.length})`));
+          myIssues.forEach(i => body.appendChild(buildJiraItem(i, false)));
+        }
+        if (showUnassigned && supportIssues.length) {
+          body.appendChild(divider(`Unassigned Support (${supportIssues.length})`));
+          supportIssues.forEach(i => body.appendChild(buildJiraItem(i, true)));
+        }
+      }
+
+      countEl.textContent = myIssues.length + (showUnassigned ? supportIssues.length : 0);
+    } catch (err) {
+      let msg = err.message;
+      if (/failed to fetch|networkerror|cors/i.test(msg)) {
+        msg = 'Network error — possibly a CORS restriction. Jira Cloud should support browser requests; check your URL and credentials.';
+      }
+      body.innerHTML = `<div class="error-state">⚠️ ${esc(msg)}</div>`;
+      countEl.textContent = '!';
+    } finally {
+      $id('refreshJira').disabled = false;
+    }
+  }
+
+  // ── GitLab ────────────────────────────────────────────────
+  async function fetchGitLabMRs() {
+    const { url, username, token } = settings.gitlab;
+    const base    = url.replace(/\/+$/, '');
+    const headers = { 'X-Gitlab-Token': token, 'X-Gitlab-Base': base };
+    const params  = `state=opened&scope=all&per_page=50`;
+
+    const [revResp, authResp] = await Promise.all([
+      fetch(`/proxy/gitlab/api/v4/merge_requests?reviewer_username=${encodeURIComponent(username)}&${params}`, { headers }),
+      fetch(`/proxy/gitlab/api/v4/merge_requests?author_username=${encodeURIComponent(username)}&${params}`,   { headers }),
+    ]);
+
+    if (!revResp.ok && !authResp.ok) {
+      throw new Error(`GitLab API ${revResp.status}: ${revResp.statusText}`);
+    }
+
+    const revMRs  = revResp.ok  ? await revResp.json()  : [];
+    const authMRs = authResp.ok ? await authResp.json() : [];
+
+    // Merge with role tagging
+    const map = new Map();
+    for (const mr of authMRs)  map.set(mr.id, { ...mr, _roles: ['author'] });
+    for (const mr of revMRs)  {
+      if (map.has(mr.id)) map.get(mr.id)._roles.push('reviewer');
+      else map.set(mr.id, { ...mr, _roles: ['reviewer'] });
+    }
+
+    return [...map.values()].sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+  }
+
+  function buildGitLabItem(mr) {
+    const isDraft      = mr.draft || mr.work_in_progress;
+    const projectPath  = mr.references?.full?.split('!')?.at(0) ?? '';
+    const projectName  = projectPath.split('/').pop() || projectPath || mr.project_id;
+
+    const roleHtml = mr._roles.map(r =>
+      r === 'author'
+        ? '<span class="mr-role mr-role-author">Author</span>'
+        : '<span class="mr-role mr-role-reviewer">Reviewer</span>'
+    ).join('');
+
+    const a = document.createElement('a');
+    a.href      = mr.web_url;
+    a.target    = '_blank';
+    a.rel       = 'noopener noreferrer';
+    a.className = 'item';
+    a.innerHTML = `
+      <div class="item-icon">${isDraft ? '📝' : '🔀'}</div>
+      <div class="item-content">
+        <div class="item-title" title="${esc(mr.title)}">${esc(mr.title)}</div>
+        <div class="item-meta">
+          <span class="item-key" title="${esc(projectPath)}">!${mr.iid} ${esc(projectName)}</span>
+          ${isDraft
+            ? '<span class="badge badge-gray">Draft</span>'
+            : '<span class="badge badge-orange">Open</span>'}
+          ${roleHtml}
+        </div>
+      </div>`;
+    return a;
+  }
+
+  async function loadGitLab() {
+    const body    = $id('gitlabBody');
+    const countEl = $id('gitlabCount');
+    const { url, username, token } = settings.gitlab;
+
+    if (location.protocol === 'file:') {
+      body.innerHTML = `<div class="error-state">⚠️ <strong>Open via a local web server, not directly from disk.</strong><br><br>Run <code>serve.bat</code> in the project folder, then open <a href="http://localhost:8080" style="color:var(--jira-blue)">http://localhost:8080</a> in your browser.</div>`;
+      countEl.textContent = '!';
+      return;
+    }
+
+    if (!url || !username || !token) {
+      body.innerHTML = `<div class="config-needed">⚙️ Configure GitLab in Settings<p>Add your GitLab URL and personal access token to get started.</p></div>`;
+      countEl.textContent = '–';
+      return;
+    }
+
+    body.innerHTML = `<div class="loading"><div class="spinner"></div><br>Loading merge requests…</div>`;
+    $id('refreshGitlab').disabled = true;
+
+    try {
+      const mrs = await fetchGitLabMRs();
+      body.innerHTML = '';
+
+      if (mrs.length === 0) {
+        body.innerHTML = `<div class="empty"><span class="empty-icon">🎉</span>No open merge requests.</div>`;
+      } else {
+        mrs.forEach(mr => body.appendChild(buildGitLabItem(mr)));
+      }
+
+      countEl.textContent = mrs.length;
+    } catch (err) {
+      let msg = err.message;
+      if (/failed to fetch|networkerror|cors/i.test(msg)) {
+        msg = 'Network error — possibly a CORS restriction on your GitLab instance. Make sure CORS is enabled for browser requests.';
+      }
+      body.innerHTML = `<div class="error-state">⚠️ ${esc(msg)}</div>`;
+      countEl.textContent = '!';
+    } finally {
+      $id('refreshGitlab').disabled = false;
+    }
+  }
+
+  // ── Local Todos ───────────────────────────────────────────
+  function renderTodos() {
+    const body    = $id('localBody');
+    const countEl = $id('localCount');
+    const active  = localTodos.filter(t => !t.done).length;
+    countEl.textContent = active;
+
+    if (localTodos.length === 0) {
+      body.innerHTML = `<div class="empty"><span class="empty-icon">📋</span>No todos yet. Add one above!</div>`;
+      return;
+    }
+
+    body.innerHTML = '';
+
+    // Undone first, newest first; done last
+    const sorted = [...localTodos].sort((a, b) => {
+      if (a.done !== b.done) return a.done ? 1 : -1;
+      return new Date(b.createdAt) - new Date(a.createdAt);
+    });
+
+    sorted.forEach(todo => {
+      const el = document.createElement('div');
+      el.className = `local-item${todo.done ? ' done' : ''}`;
+      const dateStr = new Date(todo.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+      el.innerHTML = `
+        <div class="item-check">
+          <input type="checkbox" ${todo.done ? 'checked' : ''} data-id="${esc(String(todo.id))}" aria-label="Mark done">
+        </div>
+        <div class="local-content">
+          <div class="local-title">${esc(todo.text)}</div>
+          <div class="local-date">${dateStr}</div>
+        </div>
+        <div class="item-actions">
+          <button class="btn btn-sm btn-danger" data-delete="${esc(String(todo.id))}" title="Delete">✕</button>
+        </div>`;
+      body.appendChild(el);
+    });
+
+    body.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+      cb.addEventListener('change', e => {
+        const id = Number(e.target.dataset.id);
+        const t  = localTodos.find(x => x.id === id);
+        if (t) { t.done = e.target.checked; saveTodos(); renderTodos(); }
+      });
+    });
+
+    body.querySelectorAll('[data-delete]').forEach(btn => {
+      btn.addEventListener('click', e => {
+        const id = Number(e.target.dataset.delete);
+        localTodos = localTodos.filter(x => x.id !== id);
+        saveTodos(); renderTodos();
+      });
+    });
+  }
+
+  function addTodo(text) {
+    text = text.trim();
+    if (!text) return false;
+    localTodos.unshift({ id: Date.now(), text, done: false, createdAt: new Date().toISOString() });
+    saveTodos(); renderTodos();
+    return true;
+  }
+
+  // ── Settings Modal ────────────────────────────────────────
+  function openSettings() {
+    $id('s-jira-url').value            = settings.jira.url;
+    $id('s-jira-email').value          = settings.jira.email;
+    $id('s-jira-token').value          = settings.jira.token;
+    $id('s-jira-support').value        = settings.jira.supportProject;
+    $id('s-jira-support-status').value = settings.jira.supportStatus || 'To Do';
+    $id('s-gitlab-url').value          = settings.gitlab.url;
+    $id('s-gitlab-username').value     = settings.gitlab.username;
+    $id('s-gitlab-token').value        = settings.gitlab.token;
+    $id('settingsModal').classList.remove('hidden');
+  }
+
+  function closeSettings() {
+    $id('settingsModal').classList.add('hidden');
+  }
+
+  function collectSettings() {
+    return {
+      jira: {
+        url:            $id('s-jira-url').value.trim(),
+        email:          $id('s-jira-email').value.trim(),
+        token:          $id('s-jira-token').value.trim(),
+        supportProject: $id('s-jira-support').value.trim(),
+        supportStatus:  $id('s-jira-support-status').value.trim() || 'To Do',
+      },
+      gitlab: {
+        url:      $id('s-gitlab-url').value.trim(),
+        username: $id('s-gitlab-username').value.trim(),
+        token:    $id('s-gitlab-token').value.trim(),
+      },
+    };
+  }
+
+  // ── Event wiring ──────────────────────────────────────────
+  $id('openSettings').addEventListener('click', openSettings);
+  $id('closeSettings').addEventListener('click', closeSettings);
+  $id('cancelSettings').addEventListener('click', closeSettings);
+
+  $id('settingsModal').addEventListener('click', e => {
+    if (e.target === $id('settingsModal')) closeSettings();
+  });
+
+  $id('saveSettings').addEventListener('click', () => {
+    settings = collectSettings();
+    saveSettings(settings);
+    closeSettings();
+    loadJira();
+    loadGitLab();
+  });
+
+  // Tab switching
+  document.querySelectorAll('.modal-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.modal-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      $id(`tab-${tab.dataset.tab}`).classList.add('active');
+    });
+  });
+
+  // Refresh buttons
+  $id('refreshJira').addEventListener('click', loadJira);
+  $id('refreshGitlab').addEventListener('click', loadGitLab);
+  $id('refreshAll').addEventListener('click', () => { loadJira(); loadGitLab(); });
+
+  // Unassigned support toggle
+  const unassignedCb = $id('showUnassigned');
+  unassignedCb.checked = showUnassigned;
+  unassignedCb.addEventListener('change', e => {
+    showUnassigned = e.target.checked;
+    localStorage.setItem(KEY_UNASSIGNED, showUnassigned);
+    loadJira();
+  });
+
+  // Local todo input
+  $id('addTodoBtn').addEventListener('click', () => {
+    const input = $id('todoInput');
+    if (addTodo(input.value)) input.value = '';
+  });
+
+  $id('todoInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      const input = $id('todoInput');
+      if (addTodo(input.value)) input.value = '';
+    }
+  });
+
+  // Clear done
+  $id('clearDone').addEventListener('click', () => {
+    const n = localTodos.filter(t => t.done).length;
+    if (!n) return;
+    if (confirm(`Delete ${n} completed todo${n > 1 ? 's' : ''}?`)) {
+      localTodos = localTodos.filter(t => !t.done);
+      saveTodos(); renderTodos();
+    }
+  });
+
+  // Escape closes modal
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeSettings();
+  });
+
+  // ── Init ──────────────────────────────────────────────────
+  renderTodos();
+  loadJira();
+  loadGitLab();
+})();
+</script>
+</body>
+</html>
