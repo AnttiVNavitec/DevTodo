@@ -460,6 +460,79 @@
       justify-content: flex-end;
       gap: 7px;
     }
+
+    /* ── Tracker bar ── */
+    .tracker-bar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      position: sticky;
+      top: 54px;
+      z-index: 99;
+    }
+    .tracker-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .tracker-dot.active { background: var(--local-green); box-shadow: 0 0 5px var(--local-green); }
+    .tracker-dot.idle   { background: var(--text-subtle); }
+    .tracker-label {
+      font-size: 12px;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+      flex: 1;
+    }
+    .tracker-label strong { color: var(--text); font-weight: 500; }
+    .tracker-elapsed {
+      font-size: 12px;
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      color: var(--local-green);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .tracker-today  { font-size: 12px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
+    .tracker-actions { display: flex; gap: 4px; flex-shrink: 0; }
+    .tracker-notify  { font-size: 11px; color: var(--yellow); flex-shrink: 0; }
+
+    /* ── Track button (▶ on items) ── */
+    .btn-track { color: var(--local-green); border-color: transparent; background: transparent; }
+    .btn-track:hover { background: rgba(16,185,129,0.1); border-color: var(--local-green); }
+
+    /* ── Time report ── */
+    .report-nav {
+      display: flex; align-items: center; justify-content: center;
+      gap: 10px; margin-bottom: 14px;
+    }
+    .report-date-label { font-size: 14px; font-weight: 600; min-width: 170px; text-align: center; }
+    .report-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .report-table th {
+      text-align: left; padding: 5px 8px;
+      color: var(--text-muted); font-size: 10px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.5px;
+      border-bottom: 1px solid var(--border);
+    }
+    .report-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    .report-table tr:last-child td { border-bottom: none; }
+    .td-time  { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+    .td-dur   { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 11px; white-space: nowrap; }
+    .td-label { color: var(--text); }
+    .report-total {
+      margin-top: 12px; padding-top: 10px;
+      border-top: 1px solid var(--border);
+      display: flex; justify-content: space-between;
+      font-size: 13px;
+    }
+    .report-total strong { font-family: 'SFMono-Regular', Consolas, monospace; }
+    .report-empty { padding: 28px 0; text-align: center; color: var(--text-muted); font-size: 13px; }
+    .report-live  { color: var(--local-green); font-style: italic; }
   </style>
 </head>
 <body>
@@ -476,6 +549,13 @@
       </svg>
       Refresh
     </button>
+    <button class="btn btn-icon" id="openTimeReport" title="Time Log">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/>
+        <polyline points="12 6 12 12 16 14"/>
+      </svg>
+      Time
+    </button>
     <button class="btn btn-icon" id="openSettings">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <circle cx="12" cy="12" r="3"/>
@@ -485,6 +565,8 @@
     </button>
   </div>
 </header>
+
+<div id="trackerBar" class="tracker-bar"></div>
 
 <main class="main">
   <div class="columns">
@@ -633,14 +715,52 @@
   </div>
 </div>
 
+<!-- ── Other Work modal ── -->
+<div class="modal-overlay hidden" id="otherWorkModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="otherWorkTitle" style="max-width:420px">
+    <div class="modal-header">
+      <div class="modal-title" id="otherWorkTitle">Other Work</div>
+      <button class="modal-close" id="closeOtherWork" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label" for="otherWorkInput">What are you working on?</label>
+        <input class="form-input" id="otherWorkInput" type="text" list="workSuggestions"
+               placeholder="e.g. Standup, Code review, Meeting…" maxlength="200" autocomplete="off">
+        <datalist id="workSuggestions"></datalist>
+        <div class="form-hint">Previous entries are suggested automatically.</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" id="cancelOtherWork">Cancel</button>
+      <button class="btn btn-primary" id="submitOtherWork">▶ Start</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Time Report modal ── -->
+<div class="modal-overlay hidden" id="timeReportModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="timeReportTitle">
+    <div class="modal-header">
+      <div class="modal-title" id="timeReportTitle">Time Log</div>
+      <button class="modal-close" id="closeTimeReport" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body" id="timeReportBody">
+    </div>
+  </div>
+</div>
+
 <script>
 (function () {
   'use strict';
 
   // ── Storage keys ──────────────────────────────────────────
-  const KEY_SETTINGS     = 'devtodo_settings';
-  const KEY_TODOS        = 'devtodo_todos';
-  const KEY_UNASSIGNED   = 'devtodo_show_unassigned';
+  const KEY_SETTINGS         = 'devtodo_settings';
+  const KEY_TODOS            = 'devtodo_todos';
+  const KEY_UNASSIGNED       = 'devtodo_show_unassigned';
+  const KEY_TIME_ENTRIES     = 'devtodo_time_entries';
+  const KEY_TIME_ACTIVE      = 'devtodo_time_active';
+  const KEY_TIME_SUGGESTIONS = 'devtodo_time_suggestions';
 
   // ── Default settings ──────────────────────────────────────
   const DEFAULT = {
@@ -649,9 +769,13 @@
   };
 
   // ── State ─────────────────────────────────────────────────
-  let settings      = loadSettings();
-  let localTodos    = loadTodos();
-  let showUnassigned = localStorage.getItem(KEY_UNASSIGNED) === 'true';
+  let settings        = loadSettings();
+  let localTodos      = loadTodos();
+  let showUnassigned  = localStorage.getItem(KEY_UNASSIGNED) === 'true';
+  let timeEntries     = loadTimeEntries();
+  let activeEntry     = loadActiveEntry();
+  let timeSuggestions = loadSuggestions();
+  let reportDate      = new Date().toISOString().slice(0, 10);
 
   // ── Helpers ───────────────────────────────────────────────
   function loadSettings() {
@@ -688,6 +812,245 @@
   }
 
   function $id(id) { return document.getElementById(id); }
+
+  // ── Time tracking storage ──────────────────────────────────
+  function loadTimeEntries() {
+    try { return JSON.parse(localStorage.getItem(KEY_TIME_ENTRIES) || '[]'); }
+    catch { return []; }
+  }
+  function saveTimeEntries() { localStorage.setItem(KEY_TIME_ENTRIES, JSON.stringify(timeEntries)); }
+
+  function loadActiveEntry() {
+    try { return JSON.parse(localStorage.getItem(KEY_TIME_ACTIVE) || 'null'); }
+    catch { return null; }
+  }
+  function saveActiveEntry() { localStorage.setItem(KEY_TIME_ACTIVE, JSON.stringify(activeEntry)); }
+
+  function loadSuggestions() {
+    try { return JSON.parse(localStorage.getItem(KEY_TIME_SUGGESTIONS) || '[]'); }
+    catch { return []; }
+  }
+  function saveSuggestions() { localStorage.setItem(KEY_TIME_SUGGESTIONS, JSON.stringify(timeSuggestions)); }
+
+  function pruneOldEntries() {
+    const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
+    timeEntries = timeEntries.filter(e => new Date(e.startedAt).getTime() >= cutoff);
+    saveTimeEntries();
+  }
+
+  /** Completed entries whose startedAt falls on the given YYYY-MM-DD date */
+  function entriesForDate(dateStr) {
+    return timeEntries.filter(e => e.startedAt.slice(0, 10) === dateStr);
+  }
+
+  function todayStr() { return new Date().toISOString().slice(0, 10); }
+
+  function fmtDuration(ms) {
+    const totalMin = Math.floor(Math.max(0, ms) / 60000);
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    return h > 0 ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`;
+  }
+
+  function fmtTime(isoStr) {
+    return new Date(isoStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  /**
+   * Compute the correct endedAt for auto-clock-out: caps the entry at 7.5 h
+   * of tracked time on its own start date. Uses the completed entries for that
+   * date (not the active one) so the math is stable even when called after
+   * waking from sleep the next day.
+   */
+  function computeCappedEnd(entry) {
+    const dateStr   = entry.startedAt.slice(0, 10);
+    const doneMin   = entriesForDate(dateStr)
+      .reduce((s, e) => s + (new Date(e.endedAt) - new Date(e.startedAt)) / 60000, 0);
+    const remaining = Math.max(0, 450 - doneMin);
+    const cappedTs  = new Date(entry.startedAt).getTime() + remaining * 60000;
+    return new Date(Math.min(cappedTs, Date.now())).toISOString();
+  }
+
+  function clockIn(label, type) {
+    if (activeEntry) {
+      activeEntry.endedAt = new Date().toISOString();
+      timeEntries.push(activeEntry);
+      saveTimeEntries();
+    }
+    activeEntry = { id: Date.now(), label, type, startedAt: new Date().toISOString(), endedAt: null };
+    saveActiveEntry();
+    renderTracker();
+  }
+
+  function clockOut(endedAt) {
+    if (!activeEntry) return;
+    activeEntry.endedAt = endedAt || new Date().toISOString();
+    timeEntries.push(activeEntry);
+    saveTimeEntries();
+    activeEntry = null;
+    saveActiveEntry();
+    renderTracker();
+  }
+
+  function checkAutoClockout() {
+    if (!activeEntry) return;
+    const dateStr = activeEntry.startedAt.slice(0, 10);
+    const doneMin = entriesForDate(dateStr)
+      .reduce((s, e) => s + (new Date(e.endedAt) - new Date(e.startedAt)) / 60000, 0);
+    const liveMin = (Date.now() - new Date(activeEntry.startedAt)) / 60000;
+    if (doneMin + liveMin >= 450) {
+      const bar = $id('trackerBar');
+      clockOut(computeCappedEnd(activeEntry));
+      if (bar) bar.dataset.notify = '⏰ Auto-clocked out — 7.5 h reached';
+    }
+  }
+
+  // ── Tracker bar ──────────────────────────────────────────
+  function renderTracker() {
+    const bar = $id('trackerBar');
+    if (!bar) return;
+    const notify  = bar.dataset.notify || '';
+    const ds      = todayStr();
+    const doneMs  = timeEntries
+      .filter(e => e.startedAt.slice(0, 10) === ds)
+      .reduce((s, e) => s + (new Date(e.endedAt) - new Date(e.startedAt)), 0);
+    const liveMs  = (activeEntry && activeEntry.startedAt.slice(0, 10) === ds)
+      ? Date.now() - new Date(activeEntry.startedAt) : 0;
+    const todayTotal = fmtDuration(doneMs + liveMs);
+
+    if (activeEntry) {
+      const elapsed = Date.now() - new Date(activeEntry.startedAt);
+      bar.innerHTML = `
+        <div class="tracker-dot active"></div>
+        <span class="tracker-label"><strong>${esc(activeEntry.label)}</strong></span>
+        <span class="tracker-elapsed">${fmtDuration(elapsed)}</span>
+        <span class="tracker-today">Today: ${esc(todayTotal)}</span>
+        <div class="tracker-actions">
+          <button class="btn btn-sm" id="trackerOtherBtn">Other work…</button>
+          <button class="btn btn-sm btn-danger" id="trackerStopBtn">■ Stop</button>
+        </div>
+        ${notify ? `<span class="tracker-notify">${esc(notify)}</span>` : ''}`;
+      $id('trackerStopBtn').addEventListener('click', () => {
+        delete bar.dataset.notify;
+        clockOut();
+      });
+      $id('trackerOtherBtn').addEventListener('click', openOtherWork);
+    } else {
+      bar.innerHTML = `
+        <div class="tracker-dot idle"></div>
+        <span class="tracker-label" style="color:var(--text-subtle)">Not tracking</span>
+        <div style="flex:1"></div>
+        <span class="tracker-today">Today: ${esc(todayTotal)}</span>
+        <div class="tracker-actions">
+          <button class="btn btn-sm" id="trackerOtherBtn">▶ Other work…</button>
+        </div>
+        ${notify ? `<span class="tracker-notify">${esc(notify)}</span>` : ''}`;
+      $id('trackerOtherBtn').addEventListener('click', openOtherWork);
+    }
+
+    // Keep report live while open
+    if ($id('timeReportModal') && !$id('timeReportModal').classList.contains('hidden')) {
+      renderTimeReport();
+    }
+  }
+
+  // ── Other work modal ────────────────────────────────────
+  function openOtherWork() {
+    const dl = $id('workSuggestions');
+    dl.innerHTML = timeSuggestions.map(s => `<option value="${esc(s)}">`).join('');
+    $id('otherWorkInput').value = '';
+    $id('otherWorkModal').classList.remove('hidden');
+    setTimeout(() => $id('otherWorkInput').focus(), 50);
+  }
+
+  function closeOtherWork() {
+    $id('otherWorkModal').classList.add('hidden');
+  }
+
+  function submitOtherWork() {
+    const val = $id('otherWorkInput').value.trim();
+    if (!val) return;
+    if (!timeSuggestions.includes(val)) {
+      timeSuggestions.unshift(val);
+      if (timeSuggestions.length > 50) timeSuggestions.pop();
+      saveSuggestions();
+    }
+    clockIn(val, 'other');
+    closeOtherWork();
+  }
+
+  // ── Time report modal ──────────────────────────────────
+  function openTimeReport() {
+    reportDate = todayStr();
+    renderTimeReport();
+    $id('timeReportModal').classList.remove('hidden');
+  }
+
+  function closeTimeReport() {
+    $id('timeReportModal').classList.add('hidden');
+  }
+
+  function renderTimeReport() {
+    const body = $id('timeReportBody');
+    if (!body) return;
+    const today   = todayStr();
+    const minDate = new Date(Date.now() - 13 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const prevDis = reportDate <= minDate ? 'disabled' : '';
+    const nextDis = reportDate >= today   ? 'disabled' : '';
+    const display = new Date(reportDate + 'T12:00:00').toLocaleDateString('en-US', {
+      weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
+    });
+
+    const dayEntries = entriesForDate(reportDate);
+    const showActive = !!(activeEntry && activeEntry.startedAt.slice(0, 10) === reportDate);
+    let totalMs = dayEntries.reduce((s, e) => s + (new Date(e.endedAt) - new Date(e.startedAt)), 0);
+    if (showActive) totalMs += Date.now() - new Date(activeEntry.startedAt);
+
+    const rowsHtml = [
+      ...dayEntries.map(e => {
+        const dur = new Date(e.endedAt) - new Date(e.startedAt);
+        return `<tr>
+          <td class="td-time">${fmtTime(e.startedAt)}</td>
+          <td class="td-time">${fmtTime(e.endedAt)}</td>
+          <td class="td-dur">${fmtDuration(dur)}</td>
+          <td class="td-label">${esc(e.label)}</td>
+        </tr>`;
+      }),
+      ...(showActive ? [`<tr>
+        <td class="td-time">${fmtTime(activeEntry.startedAt)}</td>
+        <td class="td-time report-live">now</td>
+        <td class="td-dur report-live">${fmtDuration(Date.now() - new Date(activeEntry.startedAt))}</td>
+        <td class="td-label report-live">${esc(activeEntry.label)}</td>
+      </tr>`] : []),
+    ].join('');
+
+    body.innerHTML = `
+      <div class="report-nav">
+        <button class="btn btn-sm btn-icon" id="reportPrev" ${prevDis}>‹</button>
+        <span class="report-date-label">${esc(display)}</span>
+        <button class="btn btn-sm btn-icon" id="reportNext" ${nextDis}>›</button>
+      </div>
+      ${(dayEntries.length === 0 && !showActive)
+        ? '<div class="report-empty">No tracked time on this day.</div>'
+        : `<table class="report-table">
+            <thead><tr><th>Start</th><th>End</th><th>Duration</th><th>Description</th></tr></thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+          <div class="report-total"><span>Total</span><strong>${fmtDuration(totalMs)}</strong></div>`}`;
+
+    $id('reportPrev').addEventListener('click', () => {
+      const d = new Date(reportDate + 'T12:00:00');
+      d.setDate(d.getDate() - 1);
+      reportDate = d.toISOString().slice(0, 10);
+      renderTimeReport();
+    });
+    $id('reportNext').addEventListener('click', () => {
+      const d = new Date(reportDate + 'T12:00:00');
+      d.setDate(d.getDate() + 1);
+      reportDate = d.toISOString().slice(0, 10);
+      renderTimeReport();
+    });
+  }
 
   // ── Jira ──────────────────────────────────────────────────
   async function jiraFetch(jql) {
@@ -797,6 +1160,7 @@
     a.target = '_blank';
     a.rel    = 'noopener noreferrer';
     a.className = 'item';
+    const trackLabel = `${key}: ${title}`.slice(0, 80);
     a.innerHTML = `
       <div class="priority-dot ${priorityClass(priority)}" title="Priority: ${esc(priority)}"></div>
       <div class="item-icon">${issueTypeIcon(typeName)}</div>
@@ -808,7 +1172,14 @@
           <span class="badge badge-gray">${esc(typeName)}</span>
           ${isSupport ? '<span class="badge badge-yellow">Support</span>' : ''}
         </div>
+      </div>
+      <div class="item-actions">
+        <button class="btn btn-sm btn-track" title="Track time">▶</button>
       </div>`;
+    a.querySelector('.btn-track').addEventListener('click', e => {
+      e.preventDefault(); e.stopPropagation();
+      clockIn(trackLabel, 'jira');
+    });
     return a;
   }
 
@@ -944,6 +1315,7 @@
     a.target    = '_blank';
     a.rel       = 'noopener noreferrer';
     a.className = 'item';
+    const trackLabel = `!${mr.iid} ${projectName}: ${mr.title}`.slice(0, 80);
     a.innerHTML = `
       <div class="item-icon">${isDraft ? '📝' : '🔀'}</div>
       <div class="item-content">
@@ -954,7 +1326,14 @@
           ${mr.approved ? '<span class="badge badge-green">Approved</span>' : ''}
           ${roleHtml}
         </div>
+      </div>
+      <div class="item-actions">
+        <button class="btn btn-sm btn-track" title="Track time">▶</button>
       </div>`;
+    a.querySelector('.btn-track').addEventListener('click', e => {
+      e.preventDefault(); e.stopPropagation();
+      clockIn(trackLabel, 'gitlab');
+    });
     return a;
   }
 
@@ -1075,6 +1454,7 @@
           <div class="local-date">${dateStr}</div>
         </div>
         <div class="item-actions">
+          <button class="btn btn-sm btn-track" data-track="${esc(String(todo.id))}" title="Track time">▶</button>
           <button class="btn btn-sm btn-danger" data-delete="${esc(String(todo.id))}" title="Delete">✕</button>
         </div>`;
       body.appendChild(el);
@@ -1085,6 +1465,14 @@
         const id = Number(e.target.dataset.id);
         const t  = localTodos.find(x => x.id === id);
         if (t) { t.done = e.target.checked; saveTodos(); renderTodos(); }
+      });
+    });
+
+    body.querySelectorAll('[data-track]').forEach(btn => {
+      btn.addEventListener('click', e => {
+        const id = Number(e.currentTarget.dataset.track);
+        const t  = localTodos.find(x => x.id === id);
+        if (t) clockIn(t.text.slice(0, 80), 'local');
       });
     });
 
@@ -1143,6 +1531,22 @@
   $id('openSettings').addEventListener('click', openSettings);
   $id('closeSettings').addEventListener('click', closeSettings);
   $id('cancelSettings').addEventListener('click', closeSettings);
+
+  $id('openTimeReport').addEventListener('click', openTimeReport);
+  $id('closeTimeReport').addEventListener('click', closeTimeReport);
+  $id('timeReportModal').addEventListener('click', e => {
+    if (e.target === $id('timeReportModal')) closeTimeReport();
+  });
+
+  $id('closeOtherWork').addEventListener('click', closeOtherWork);
+  $id('cancelOtherWork').addEventListener('click', closeOtherWork);
+  $id('submitOtherWork').addEventListener('click', submitOtherWork);
+  $id('otherWorkInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') submitOtherWork();
+  });
+  $id('otherWorkModal').addEventListener('click', e => {
+    if (e.target === $id('otherWorkModal')) closeOtherWork();
+  });
 
   $id('settingsModal').addEventListener('click', e => {
     if (e.target === $id('settingsModal')) closeSettings();
@@ -1205,10 +1609,22 @@
 
   // Escape closes modal
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') closeSettings();
+    if (e.key === 'Escape') { closeSettings(); closeOtherWork(); closeTimeReport(); }
   });
 
   // ── Init ──────────────────────────────────────────────────
+  pruneOldEntries();
+  // Auto-close any stale session from a previous day (handles laptop sleeping across midnight)
+  if (activeEntry && activeEntry.startedAt.slice(0, 10) !== todayStr()) {
+    clockOut(computeCappedEnd(activeEntry));
+  }
+  checkAutoClockout();
+  renderTracker();
+  setInterval(renderTracker, 1000);
+  setInterval(checkAutoClockout, 5 * 60 * 1000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') checkAutoClockout();
+  });
   renderTodos();
   loadJira();
   loadGitLab();
