@@ -971,11 +971,11 @@
           4: 'Already Reviewed',
           5: 'Other',
         };
-        // Primary: tier rank. Secondary: newest created_at first (old items sink — LRU-style)
+        // Primary: tier rank. Secondary: newest updated_at first (stale/inactive MRs sink — LRU-style)
         const sorted = [...mrs].sort((a, b) => {
           const ra = mrRank(a), rb = mrRank(b);
           if (ra !== rb) return ra - rb;
-          return new Date(b.created_at) - new Date(a.created_at);
+          return new Date(b.updated_at) - new Date(a.updated_at);
         });
         const tierCounts = {};
         sorted.forEach(mr => { const t = mrRank(mr); tierCounts[t] = (tierCounts[t] || 0) + 1; });
