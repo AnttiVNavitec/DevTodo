@@ -693,7 +693,7 @@
   async function jiraFetch(jql) {
     const { url, email, token } = settings.jira;
     const auth   = btoa(`${email}:${token}`);
-    const query  = `jql=${encodeURIComponent(jql)}&fields=summary,status,issuetype,priority&maxResults=100`;
+    const query  = `jql=${encodeURIComponent(jql)}&fields=summary,status,issuetype,priority,customfield_10020,updated,created&maxResults=100`;
     const resp   = await fetch(`/proxy/jira/rest/api/3/search/jql?${query}`, {
       headers: {
         'X-Jira-Auth': `Basic ${auth}`,
@@ -745,6 +745,42 @@
     if (c === 'done')                    return 'badge-green';
     if (c === 'in progress' || c === 'indeterminate') return 'badge-blue';
     return 'badge-gray';
+  }
+
+  // ── Jira sorting ─────────────────────────────────────────
+  function priorityOrder(name) {
+    const p = (name || '').toLowerCase();
+    if (['highest','critical','blocker'].includes(p)) return 0;
+    if (p === 'high')   return 1;
+    if (p === 'medium') return 2;
+    if (p === 'low')    return 3;
+    return 4;
+  }
+
+  function jiraStatusTier(issue) {
+    const s = (issue.fields.status?.name || '').toUpperCase();
+    if (s.includes('FOR REVIEW'))                                              return 2;
+    if (s.includes('WAITING FOR SUPPORT') || s.includes('WAITING FOR RELEASE')) return 1;
+    return 0;
+  }
+
+  // My Issues: sprint → priority → status tier → LRU
+  function jiraMyIssueSort(a, b) {
+    const inSprint = i => i.fields.customfield_10020?.some(s => s.state === 'active') ? 0 : 1;
+    const sA = inSprint(a), sB = inSprint(b);
+    if (sA !== sB) return sA - sB;
+    const pA = priorityOrder(a.fields.priority?.name), pB = priorityOrder(b.fields.priority?.name);
+    if (pA !== pB) return pA - pB;
+    const tA = jiraStatusTier(a), tB = jiraStatusTier(b);
+    if (tA !== tB) return tA - tB;
+    return new Date(b.fields.updated) - new Date(a.fields.updated);
+  }
+
+  // Support: priority → FIFO (oldest first)
+  function jiraSupportSort(a, b) {
+    const pA = priorityOrder(a.fields.priority?.name), pB = priorityOrder(b.fields.priority?.name);
+    if (pA !== pB) return pA - pB;
+    return new Date(a.fields.created) - new Date(b.fields.created);
   }
 
   function buildJiraItem(issue, isSupport) {
@@ -815,12 +851,14 @@
         body.innerHTML = `<div class="empty"><span class="empty-icon">🎉</span>All caught up — no open issues!</div>`;
       } else {
         if (myIssues.length) {
-          body.appendChild(divider(`My Issues (${myIssues.length})`));
-          myIssues.forEach(i => body.appendChild(buildJiraItem(i, false)));
+          const sorted = [...myIssues].sort(jiraMyIssueSort);
+          body.appendChild(divider(`My Issues (${sorted.length})`));
+          sorted.forEach(i => body.appendChild(buildJiraItem(i, false)));
         }
         if (showUnassigned && supportIssues.length) {
-          body.appendChild(divider(`Unassigned Support (${supportIssues.length})`));
-          supportIssues.forEach(i => body.appendChild(buildJiraItem(i, true)));
+          const sorted = [...supportIssues].sort(jiraSupportSort);
+          body.appendChild(divider(`Unassigned Support (${sorted.length})`));
+          sorted.forEach(i => body.appendChild(buildJiraItem(i, true)));
         }
       }
 
