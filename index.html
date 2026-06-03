@@ -870,7 +870,21 @@
       else map.set(mr.id, { ...mr, _roles: ['reviewer'] });
     }
 
-    return [...map.values()].sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+    const mrs = [...map.values()].sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+
+    // Fetch approval status per MR in parallel (global list API does not include this)
+    const approvalResults = await Promise.all(
+      mrs.map(mr =>
+        fetch(`/proxy/gitlab/api/v4/projects/${mr.project_id}/merge_requests/${mr.iid}/approvals`, { headers })
+          .then(r => r.ok ? r.json() : null)
+          .catch(() => null)
+      )
+    );
+    for (let i = 0; i < mrs.length; i++) {
+      if (approvalResults[i]?.approved_by?.length > 0) mrs[i].approved = true;
+    }
+
+    return mrs;
   }
 
   function buildGitLabItem(mr) {
@@ -895,9 +909,8 @@
         <div class="item-title" title="${esc(mr.title)}">${esc(mr.title)}</div>
         <div class="item-meta">
           <span class="item-key" title="${esc(projectPath)}">!${mr.iid} ${esc(projectName)}</span>
-          ${isDraft
-            ? '<span class="badge badge-gray">Draft</span>'
-            : '<span class="badge badge-orange">Open</span>'}
+          ${isDraft ? '<span class="badge badge-gray">Draft</span>' : ''}
+          ${mr.approved ? '<span class="badge badge-green">Approved</span>' : ''}
           ${roleHtml}
         </div>
       </div>`;
