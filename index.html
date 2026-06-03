@@ -870,7 +870,7 @@
       else map.set(mr.id, { ...mr, _roles: ['reviewer'] });
     }
 
-    const mrs = [...map.values()].sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+    const mrs = [...map.values()];
 
     // Fetch approval status per MR in parallel (global list API does not include this)
     const approvalResults = await Promise.all(
@@ -881,7 +881,10 @@
       )
     );
     for (let i = 0; i < mrs.length; i++) {
-      if (approvalResults[i]?.approved_by?.length > 0) mrs[i].approved = true;
+      const result = approvalResults[i];
+      if (result?.approved_by?.length > 0) mrs[i].approved = true;
+      // Track whether the current user personally approved this MR
+      mrs[i]._iApproved = result?.approved_by?.some(e => e.user?.username === username) ?? false;
     }
 
     return mrs;
@@ -917,6 +920,23 @@
     return a;
   }
 
+  // ── MR ranking ───────────────────────────────────────────
+  // Tier 1: assigned to me + approved  → ready to merge (highest)
+  // Tier 2: I'm reviewer, haven't approved yet → needs my review
+  // Tier 3: assigned to me, not yet approved  → waiting for reviewers
+  // Tier 4: I'm reviewer and already approved → done (lowest)
+  function mrRank(mr) {
+    const isAssignee = mr._roles.includes('assignee');
+    const isReviewer = mr._roles.includes('reviewer');
+    const approved   = !!mr.approved;
+    const iApproved  = !!mr._iApproved;
+    if (isAssignee && approved)          return 1;
+    if (isReviewer && !iApproved)        return 2;
+    if (isAssignee)                      return 3;
+    if (isReviewer && iApproved)         return 4;
+    return 5; // author-only fallback
+  }
+
   async function loadGitLab() {
     const body    = $id('gitlabBody');
     const countEl = $id('gitlabCount');
@@ -944,7 +964,30 @@
       if (mrs.length === 0) {
         body.innerHTML = `<div class="empty"><span class="empty-icon">🎉</span>No open merge requests.</div>`;
       } else {
-        mrs.forEach(mr => body.appendChild(buildGitLabItem(mr)));
+        const TIER_LABELS = {
+          1: 'Ready to Merge',
+          2: 'Needs My Review',
+          3: 'Awaiting Review',
+          4: 'Already Reviewed',
+          5: 'Other',
+        };
+        // Primary: tier rank. Secondary: newest created_at first (old items sink — LRU-style)
+        const sorted = [...mrs].sort((a, b) => {
+          const ra = mrRank(a), rb = mrRank(b);
+          if (ra !== rb) return ra - rb;
+          return new Date(b.created_at) - new Date(a.created_at);
+        });
+        const tierCounts = {};
+        sorted.forEach(mr => { const t = mrRank(mr); tierCounts[t] = (tierCounts[t] || 0) + 1; });
+        let currentTier = null;
+        sorted.forEach(mr => {
+          const tier = mrRank(mr);
+          if (tier !== currentTier) {
+            currentTier = tier;
+            body.appendChild(divider(`${TIER_LABELS[tier]} (${tierCounts[tier]})`));
+          }
+          body.appendChild(buildGitLabItem(mr));
+        });
       }
 
       countEl.textContent = mrs.length;
