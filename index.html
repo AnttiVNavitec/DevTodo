@@ -257,6 +257,7 @@
     .mr-role { font-size: 10px; padding: 1px 5px; border-radius: 3px; font-weight: 700; }
     .mr-role-author   { background: rgba(38,132,255,0.15); color: var(--jira-blue); }
     .mr-role-reviewer { background: rgba(167,139,250,0.15); color: #a78bfa; }
+    .mr-role-assignee { background: rgba(16,185,129,0.15);  color: var(--local-green); }
 
     .item-actions { display: flex; gap: 3px; flex-shrink: 0; opacity: 0; transition: opacity 0.1s; }
     .item:hover .item-actions,
@@ -843,23 +844,29 @@
     const headers = { 'X-Gitlab-Token': token, 'X-Gitlab-Base': base };
     const params  = `state=opened&scope=all&per_page=50`;
 
-    const [revResp, authResp] = await Promise.all([
-      fetch(`/proxy/gitlab/api/v4/merge_requests?reviewer_username=${encodeURIComponent(username)}&${params}`, { headers }),
-      fetch(`/proxy/gitlab/api/v4/merge_requests?author_username=${encodeURIComponent(username)}&${params}`,   { headers }),
+    const [revResp, authResp, assigneeResp] = await Promise.all([
+      fetch(`/proxy/gitlab/api/v4/merge_requests?reviewer_username=${encodeURIComponent(username)}&${params}`,  { headers }),
+      fetch(`/proxy/gitlab/api/v4/merge_requests?author_username=${encodeURIComponent(username)}&${params}`,    { headers }),
+      fetch(`/proxy/gitlab/api/v4/merge_requests?assignee_username=${encodeURIComponent(username)}&${params}`,  { headers }),
     ]);
 
-    if (!revResp.ok && !authResp.ok) {
+    if (!revResp.ok && !authResp.ok && !assigneeResp.ok) {
       throw new Error(`GitLab API ${revResp.status}: ${revResp.statusText}`);
     }
 
-    const revMRs  = revResp.ok  ? await revResp.json()  : [];
-    const authMRs = authResp.ok ? await authResp.json() : [];
+    const revMRs      = revResp.ok      ? await revResp.json()      : [];
+    const authMRs     = authResp.ok     ? await authResp.json()     : [];
+    const assigneeMRs = assigneeResp.ok ? await assigneeResp.json() : [];
 
     // Merge with role tagging
     const map = new Map();
-    for (const mr of authMRs)  map.set(mr.id, { ...mr, _roles: ['author'] });
-    for (const mr of revMRs)  {
-      if (map.has(mr.id)) map.get(mr.id)._roles.push('reviewer');
+    for (const mr of authMRs)     map.set(mr.id, { ...mr, _roles: ['author'] });
+    for (const mr of assigneeMRs) {
+      if (map.has(mr.id)) { if (!map.get(mr.id)._roles.includes('assignee')) map.get(mr.id)._roles.push('assignee'); }
+      else map.set(mr.id, { ...mr, _roles: ['assignee'] });
+    }
+    for (const mr of revMRs) {
+      if (map.has(mr.id)) { if (!map.get(mr.id)._roles.includes('reviewer')) map.get(mr.id)._roles.push('reviewer'); }
       else map.set(mr.id, { ...mr, _roles: ['reviewer'] });
     }
 
@@ -872,9 +879,9 @@
     const projectName  = projectPath.split('/').pop() || projectPath || mr.project_id;
 
     const roleHtml = mr._roles.map(r =>
-      r === 'author'
-        ? '<span class="mr-role mr-role-author">Author</span>'
-        : '<span class="mr-role mr-role-reviewer">Reviewer</span>'
+      r === 'author'   ? '<span class="mr-role mr-role-author">Author</span>' :
+      r === 'assignee' ? '<span class="mr-role mr-role-assignee">Assignee</span>' :
+                         '<span class="mr-role mr-role-reviewer">Reviewer</span>'
     ).join('');
 
     const a = document.createElement('a');
