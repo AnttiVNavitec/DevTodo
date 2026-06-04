@@ -375,10 +375,10 @@
   }
 
   /**
-   * Compute the correct endedAt for auto-clock-out: caps the entry at 7.5 h
-   * of tracked time on its own start date. Uses the completed entries for that
-   * date (not the active one) so the math is stable even when called after
-   * waking from sleep the next day.
+   * Compute the correct endedAt for stale auto-clock-out: caps the entry at
+   * 7.5 h of tracked time on its own start date. Uses the completed entries
+   * for that date (not the active one) so the math is stable even when called
+   * after waking from sleep the next day.
    */
   function computeCappedEnd(entry) {
     const dateStr   = entry.startedAt.slice(0, 10);
@@ -412,14 +412,19 @@
 
   function checkAutoClockout() {
     if (!activeEntry) return;
+    if (activeEntry.startedAt.slice(0, 10) === todayStr()) return;
+
     const dateStr = activeEntry.startedAt.slice(0, 10);
     const doneMin = entriesForDate(dateStr)
       .reduce((s, e) => s + (new Date(e.endedAt) - new Date(e.startedAt)) / 60000, 0);
-    const liveMin = (Date.now() - new Date(activeEntry.startedAt)) / 60000;
-    if (doneMin + liveMin >= 450) {
-      const bar = $id('trackerBar');
-      clockOut(computeCappedEnd(activeEntry));
-      if (bar) bar.dataset.notify = '⏰ Auto-clocked out — 7.5 h reached';
+
+    const bar = $id('trackerBar');
+    clockOut(computeCappedEnd(activeEntry));
+    if (bar) {
+      const totalMin = Math.max(0, Math.round(doneMin));
+      const reason = totalMin >= 450 ? '⏰ Auto-clocked out — previous day capped at 7.5 h'
+        : '⏰ Auto-clocked out — previous day session was still running';
+      bar.dataset.notify = reason;
     }
   }
 
