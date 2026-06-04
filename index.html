@@ -247,6 +247,8 @@
   let activeEntry     = loadActiveEntry();
   let timeSuggestions = loadSuggestions();
   let reportDate      = new Date().toISOString().slice(0, 10);
+  let reportTab       = 'log';
+  let summarySelection = new Set();
 
   // ── Helpers ───────────────────────────────────────────────
   function loadSettings() {
@@ -325,6 +327,51 @@
 
   function fmtTime(isoStr) {
     return new Date(isoStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function summaryLine(label, ms) {
+    return `${fmtDuration(ms)}  ${label}`;
+  }
+
+  async function copyText(text) {
+    if (!text) return false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {}
+
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    area.setSelectionRange(0, area.value.length);
+    let ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } catch {}
+    document.body.removeChild(area);
+    return ok;
+  }
+
+  function setReportCopyFeedback(message, isError) {
+    const el = $id('reportCopyFeedback');
+    if (!el) return;
+    el.textContent = message || '';
+    el.className = `report-copy-feedback${message ? ' visible' : ''}${isError ? ' error' : ''}`;
+  }
+
+  async function copySummaryLines(lines, successMessage) {
+    if (!lines.length) {
+      setReportCopyFeedback('Nothing to copy for this selection.', true);
+      return;
+    }
+    const ok = await copyText(lines.join('\n'));
+    setReportCopyFeedback(ok ? successMessage : 'Copy failed in this browser.', !ok);
   }
 
   /**
@@ -453,6 +500,7 @@
   // ── Time report modal ──────────────────────────────────
   function openTimeReport() {
     reportDate = todayStr();
+    summarySelection = new Set();
     renderTimeReport();
     $id('timeReportModal').classList.remove('hidden');
   }
@@ -477,6 +525,54 @@
     let totalMs = dayEntries.reduce((s, e) => s + (new Date(e.endedAt) - new Date(e.startedAt)), 0);
     if (showActive) totalMs += Date.now() - new Date(activeEntry.startedAt);
 
+    body.innerHTML = `
+      <div class="report-nav">
+        <button class="btn btn-sm btn-icon" id="reportPrev" ${prevDis}>‹</button>
+        <span class="report-date-label">${esc(display)}</span>
+        <button class="btn btn-sm btn-icon" id="reportNext" ${nextDis}>›</button>
+      </div>
+      <div class="report-tabs">
+        <button class="report-tab${reportTab === 'log' ? ' active' : ''}" data-rtab="log">Log</button>
+        <button class="report-tab${reportTab === 'summary' ? ' active' : ''}" data-rtab="summary">Summary</button>
+      </div>
+      <div id="reportTabContent"></div>`;
+
+    $id('reportPrev').addEventListener('click', () => {
+      const d = new Date(reportDate + 'T12:00:00');
+      d.setDate(d.getDate() - 1);
+      reportDate = d.toISOString().slice(0, 10);
+      summarySelection = new Set();
+      renderTimeReport();
+    });
+    $id('reportNext').addEventListener('click', () => {
+      const d = new Date(reportDate + 'T12:00:00');
+      d.setDate(d.getDate() + 1);
+      reportDate = d.toISOString().slice(0, 10);
+      summarySelection = new Set();
+      renderTimeReport();
+    });
+
+    body.querySelectorAll('.report-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        reportTab = tab.dataset.rtab;
+        renderTimeReport();
+      });
+    });
+
+    if (dayEntries.length === 0 && !showActive) {
+      $id('reportTabContent').innerHTML = '<div class="report-empty">No tracked time on this day.</div>';
+      return;
+    }
+
+    if (reportTab === 'log') {
+      renderLogView(dayEntries, showActive, totalMs);
+    } else {
+      renderSummaryView(dayEntries, showActive, totalMs);
+    }
+  }
+
+  function renderLogView(dayEntries, showActive, totalMs) {
+    const content = $id('reportTabContent');
     const rowsHtml = [
       ...dayEntries.map(e => {
         const dur = new Date(e.endedAt) - new Date(e.startedAt);
@@ -495,31 +591,91 @@
       </tr>`] : []),
     ].join('');
 
-    body.innerHTML = `
-      <div class="report-nav">
-        <button class="btn btn-sm btn-icon" id="reportPrev" ${prevDis}>‹</button>
-        <span class="report-date-label">${esc(display)}</span>
-        <button class="btn btn-sm btn-icon" id="reportNext" ${nextDis}>›</button>
-      </div>
-      ${(dayEntries.length === 0 && !showActive)
-        ? '<div class="report-empty">No tracked time on this day.</div>'
-        : `<table class="report-table">
-            <thead><tr><th>Start</th><th>End</th><th>Duration</th><th>Description</th></tr></thead>
-            <tbody>${rowsHtml}</tbody>
-          </table>
-          <div class="report-total"><span>Total</span><strong>${fmtDuration(totalMs)}</strong></div>`}`;
+    content.innerHTML = `
+      <table class="report-table">
+        <thead><tr><th>Start</th><th>End</th><th>Duration</th><th>Description</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+      <div class="report-total"><span>Total</span><strong>${fmtDuration(totalMs)}</strong></div>`;
+  }
 
-    $id('reportPrev').addEventListener('click', () => {
-      const d = new Date(reportDate + 'T12:00:00');
-      d.setDate(d.getDate() - 1);
-      reportDate = d.toISOString().slice(0, 10);
-      renderTimeReport();
+  function renderSummaryView(dayEntries, showActive, totalMs) {
+    const content = $id('reportTabContent');
+    const map = new Map();
+    for (const e of dayEntries) {
+      const dur = new Date(e.endedAt) - new Date(e.startedAt);
+      map.set(e.label, (map.get(e.label) || 0) + dur);
+    }
+    if (showActive) {
+      const dur = Date.now() - new Date(activeEntry.startedAt);
+      map.set(activeEntry.label, (map.get(activeEntry.label) || 0) + dur);
+    }
+
+    const groups = [...map.entries()].sort((a, b) => b[1] - a[1]);
+    for (const label of summarySelection) {
+      if (!map.has(label)) summarySelection.delete(label);
+    }
+
+    const rowsHtml = groups.map(([label, ms]) => {
+      const isLive = showActive && activeEntry && activeEntry.label === label;
+      const checked = summarySelection.has(label) ? 'checked' : '';
+      const line = summaryLine(label, ms);
+      return `<tr class="summary-row${summarySelection.has(label) ? ' summary-selected' : ''}">
+        <td class="td-check">
+          <button class="summary-toggle" type="button" data-toggle-label="${esc(label)}" aria-pressed="${summarySelection.has(label) ? 'true' : 'false'}" aria-label="${summarySelection.has(label) ? 'Unselect' : 'Select'} ${esc(label)}">
+            <input type="checkbox" class="summary-cb" data-label="${esc(label)}" ${checked} tabindex="-1" aria-hidden="true">
+          </button>
+        </td>
+        <td class="td-dur${isLive ? ' report-live' : ''}">${fmtDuration(ms)}</td>
+        <td class="td-label summary-text${isLive ? ' report-live' : ''}">${esc(label)}</td>
+        <td class="td-copy"><button class="btn btn-sm summary-copy-btn" type="button" data-copy-line="${esc(line)}">Copy</button></td>
+      </tr>`;
+    }).join('');
+
+    const selectedMs = groups
+      .filter(([label]) => summarySelection.has(label))
+      .reduce((s, [, ms]) => s + ms, 0);
+    const selCount = summarySelection.size;
+    const selectedLines = groups
+      .filter(([label]) => summarySelection.has(label))
+      .map(([label, ms]) => summaryLine(label, ms));
+    const allLines = groups.map(([label, ms]) => summaryLine(label, ms));
+
+    content.innerHTML = `
+      <div class="report-summary-actions">
+        <button class="btn btn-sm" type="button" id="copySelectedSummary" ${selCount === 0 ? 'disabled' : ''}>Copy selected</button>
+        <button class="btn btn-sm" type="button" id="copyAllSummary">Copy all</button>
+        <span class="report-copy-feedback" id="reportCopyFeedback" aria-live="polite"></span>
+      </div>
+      <table class="report-table">
+        <thead><tr><th></th><th>Duration</th><th>Description</th><th></th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+      <div class="report-total"><span>Total</span><strong>${fmtDuration(totalMs)}</strong></div>
+      ${selCount > 0
+        ? `<div class="report-selected-total"><span>Selected (${selCount})</span><strong>${fmtDuration(selectedMs)}</strong></div>`
+        : '<div class="report-select-hint">✓ Check rows to combine their hours</div>'}`;
+
+    content.querySelectorAll('[data-toggle-label]').forEach(btn => {
+      btn.addEventListener('click', e => {
+        const label = e.currentTarget.dataset.toggleLabel;
+        if (summarySelection.has(label)) summarySelection.delete(label);
+        else summarySelection.add(label);
+        renderTimeReport();
+      });
     });
-    $id('reportNext').addEventListener('click', () => {
-      const d = new Date(reportDate + 'T12:00:00');
-      d.setDate(d.getDate() + 1);
-      reportDate = d.toISOString().slice(0, 10);
-      renderTimeReport();
+
+    content.querySelectorAll('[data-copy-line]').forEach(btn => {
+      btn.addEventListener('click', async e => {
+        await copySummaryLines([e.currentTarget.dataset.copyLine], 'Summary row copied.');
+      });
+    });
+
+    $id('copySelectedSummary')?.addEventListener('click', async () => {
+      await copySummaryLines(selectedLines, 'Selected summary rows copied.');
+    });
+    $id('copyAllSummary')?.addEventListener('click', async () => {
+      await copySummaryLines(allLines, 'Full summary copied.');
     });
   }
 

@@ -526,3 +526,110 @@
     .report-total strong { font-family: 'SFMono-Regular', Consolas, monospace; }
     .report-empty { padding: 28px 0; text-align: center; color: var(--text-muted); font-size: 13px; }
     .report-live  { color: var(--local-green); font-style: italic; }
+
+    /* ── Report tabs (Log / Summary) ── */
+    .report-tabs {
+      display: flex;
+      gap: 2px;
+      background: var(--bg);
+      padding: 3px;
+      border-radius: var(--radius-sm);
+      margin-bottom: 14px;
+    }
+    .report-tab {
+      flex: 1;
+      padding: 6px 10px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 500;
+      font-family: inherit;
+      transition: all 0.12s;
+    }
+    .report-tab.active  { background: var(--surface2); color: var(--text); }
+    .report-tab:hover:not(.active) { color: var(--text); }
+
+    /* ── Summary view ── */
+    .report-summary-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+    .report-copy-feedback {
+      min-height: 18px;
+      font-size: 11px;
+      color: var(--text-subtle);
+      opacity: 0;
+      transition: opacity 0.12s;
+    }
+    .report-copy-feedback.visible { opacity: 1; }
+    .report-copy-feedback.error { color: var(--red); }
+
+    .td-check { width: 46px; padding: 4px 6px !important; }
+    .td-copy { width: 1%; white-space: nowrap; }
+    .summary-toggle {
+      width: 30px;
+      height: 30px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s;
+    }
+    .summary-toggle:hover {
+      background: rgba(38,132,255,0.08);
+      border-color: rgba(38,132,255,0.28);
+    }
+    .summary-toggle:focus-visible {
+      outline: 2px solid rgba(38,132,255,0.5);
+      outline-offset: 1px;
+    }
+    .summary-toggle input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      margin: 0;
+      pointer-events: none;
+      accent-color: var(--jira-blue);
+    }
+    .summary-selected .td-dur,
+    .summary-selected .td-label { color: var(--jira-blue); }
+    .summary-row:hover td { background: var(--surface-hover); }
+    .summary-copy-btn { min-width: 56px; }
+    .summary-text {
+      user-select: text;
+      cursor: text;
+      word-break: break-word;
+    }
+
+    .report-selected-total {
+      margin-top: 8px;
+      padding: 8px 12px;
+      border-radius: var(--radius-sm);
+      background: rgba(38,132,255,0.1);
+      border: 1px solid rgba(38,132,255,0.25);
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+      color: var(--jira-blue);
+    }
+    .report-selected-total strong { font-family: 'SFMono-Regular', Consolas, monospace; }
+    .report-select-hint {
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--text-subtle);
+      text-align: center;
+    }
+
+    @media (max-width: 640px) {
+      .report-summary-actions { align-items: stretch; }
+      .report-summary-actions .btn { flex: 1; justify-content: center; }
+      .report-copy-feedback { width: 100%; }
+    }
