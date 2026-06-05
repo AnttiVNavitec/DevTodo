@@ -18,6 +18,8 @@ import os
 import ssl
 import sys
 
+from fetch_mr_comments import build_markdown, get_file_context, paginate, api_get
+
 PORT = 8080
 BIND = "127.0.0.1"
 
@@ -40,6 +42,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         if path in ('/', '/index.html'):
             self._serve_file('index.html', 'text/html; charset=utf-8')
+        elif path == '/gitlab/mr-comments.md':
+            self._download_gitlab_mr_comments(parsed)
         elif path.startswith('/proxy/jira/'):
             self._proxy_jira(parsed)
         elif path.startswith('/proxy/gitlab/'):
@@ -83,6 +87,120 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             url += '?' + parsed.query
 
         self._forward(url, {'PRIVATE-TOKEN': token, 'Accept': 'application/json'})
+
+    def _download_gitlab_mr_comments(self, parsed):
+        token = self.headers.get('X-Gitlab-Token', '').strip()
+        base = self.headers.get('X-Gitlab-Base', '').strip().rstrip('/')
+
+        if not token or not base:
+            self._json_error(400, 'Missing X-Gitlab-Token or X-Gitlab-Base header')
+            return
+
+        query = urllib.parse.parse_qs(parsed.query)
+        project = (query.get('project') or [''])[0].strip()
+        mr_iid = (query.get('mr_iid') or [''])[0].strip()
+        context_raw = (query.get('context') or ['4'])[0].strip()
+        no_context = (query.get('no_context') or [''])[0].strip().lower() in ('1', 'true', 'yes')
+
+        if not project or not mr_iid:
+            self._json_error(400, 'Missing required query parameters: project and mr_iid')
+            return
+
+        try:
+            context_lines = max(0, int(context_raw))
+        except ValueError:
+            self._json_error(400, 'Invalid context parameter')
+            return
+
+        encoded_project = urllib.parse.quote(project, safe='')
+
+        try:
+            mr = api_get(
+                f'{base}/api/v4/projects/{encoded_project}/merge_requests/{urllib.parse.quote(mr_iid, safe="")}',
+                token,
+            )
+            discussions = paginate(
+                base,
+                f'projects/{encoded_project}/merge_requests/{urllib.parse.quote(mr_iid, safe="")}/discussions',
+                token,
+            )
+            open_threads = []
+            for disc in discussions:
+                if disc.get('individual_note') or disc.get('resolved'):
+                    continue
+
+                notes = disc.get('notes', [])
+                if not notes:
+                    continue
+
+                first_note = notes[0]
+                position = first_note.get('position')
+                if not position:
+                    continue
+
+                human_notes = [note for note in notes if not note.get('system', False)]
+                if not human_notes:
+                    continue
+
+                resolvable = [note for note in human_notes if note.get('resolvable', False)]
+                if resolvable and all(note.get('resolved', False) for note in resolvable):
+                    continue
+
+                file_path = position.get('new_path') or position.get('old_path')
+                line_number = position.get('new_line') or position.get('old_line')
+                head_sha = position.get('head_sha')
+                base_sha = position.get('base_sha')
+
+                snippet_lines = None
+                snippet_start = None
+                if not no_context and file_path and line_number and head_sha:
+                    snippet_lines, snippet_start = get_file_context(
+                        base,
+                        encoded_project,
+                        file_path,
+                        head_sha,
+                        line_number,
+                        context_lines,
+                        token,
+                    )
+
+                open_threads.append(
+                    {
+                        'discussion_id': disc['id'],
+                        'file': file_path,
+                        'line': line_number,
+                        'ref': head_sha,
+                        'base_sha': base_sha,
+                        'context_lines': snippet_lines,
+                        'context_start_line': snippet_start,
+                        'notes': [
+                            {
+                                'author': note['author']['username'],
+                                'created_at': note['created_at'],
+                                'body': note['body'],
+                                'resolved': note.get('resolved', False),
+                            }
+                            for note in human_notes
+                        ],
+                    }
+                )
+
+            markdown = build_markdown(mr, open_threads, mr_iid)
+            filename = self._safe_download_name(mr_iid, mr.get('references', {}).get('full') or mr.get('title') or 'merge-request')
+            data = markdown.encode('utf-8')
+
+            self.send_response(200)
+            self.send_header('Access-Control-Allow-Origin', f'http://{BIND}:{PORT}')
+            self.send_header('Content-Type', 'text/markdown; charset=utf-8')
+            self.send_header('Content-Disposition', f'attachment; filename="{filename}.md"')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode(errors='replace')
+            self._json_error(exc.code, body)
+        except Exception as exc:
+            self._json_error(502, str(exc))
 
     # ── HTTP forwarding ───────────────────────────────────────────────────────
     def _forward(self, url, headers):
@@ -140,6 +258,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', f'http://{BIND}:{PORT}')
         self.end_headers()
         self.wfile.write(body)
+
+    def _safe_download_name(self, mr_iid, label):
+        cleaned = ''.join(ch if ch.isalnum() or ch in ('-', '_') else '-' for ch in str(label))
+        cleaned = '-'.join(part for part in cleaned.split('-') if part)[:80]
+        return f'mr-{mr_iid}-comments' if not cleaned else f'mr-{mr_iid}-{cleaned}-comments'
 
 
 if __name__ == '__main__':

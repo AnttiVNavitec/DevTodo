@@ -74,6 +74,15 @@
     .btn-icon { padding: 6px 8px; }
     .btn-danger { color: var(--red); border-color: transparent; background: transparent; }
     .btn-danger:hover { background: rgba(248,113,113,0.1); border-color: var(--red); }
+    .btn-export-comments {
+      color: var(--gitlab-orange);
+      border-color: rgba(252,109,38,0.35);
+      background: rgba(252,109,38,0.08);
+    }
+    .btn-export-comments:hover {
+      background: rgba(252,109,38,0.16);
+      border-color: rgba(252,109,38,0.55);
+    }
 
     /* ── Layout ── */
     .main { padding: 20px 24px; max-width: 1680px; margin: 0 auto; }

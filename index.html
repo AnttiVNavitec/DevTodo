@@ -967,13 +967,68 @@
         </div>
       </div>
       <div class="item-actions">
+        <button class="btn btn-sm btn-export-comments" title="Download review comments as Markdown">Comments</button>
         <button class="btn btn-sm btn-track" title="Track time">▶</button>
       </div>`;
+    a.querySelector('.btn-export-comments').addEventListener('click', async e => {
+      e.preventDefault();
+      e.stopPropagation();
+      const button = e.currentTarget;
+      const originalText = button.textContent;
+      button.disabled = true;
+      button.textContent = '…';
+      try {
+        await downloadMrComments(mr);
+      } catch (err) {
+        const message = err?.message || 'Failed to download MR comments.';
+        window.alert(message);
+      } finally {
+        button.disabled = false;
+        button.textContent = originalText;
+      }
+    });
     a.querySelector('.btn-track').addEventListener('click', e => {
       e.preventDefault(); e.stopPropagation();
       clockIn(trackLabel, 'gitlab');
     });
     return a;
+  }
+
+  async function downloadMrComments(mr) {
+    const { url, token } = settings.gitlab;
+    const base = url.replace(/\/+$/, '');
+    const params = new URLSearchParams({
+      project: String(mr.project_id),
+      mr_iid: String(mr.iid),
+      context: '4',
+    });
+    const resp = await fetch(`/gitlab/mr-comments.md?${params.toString()}`, {
+      headers: {
+        'X-Gitlab-Token': token,
+        'X-Gitlab-Base': base,
+      },
+    });
+
+    if (!resp.ok) {
+      let message = `GitLab export failed (${resp.status})`;
+      try {
+        const payload = await resp.json();
+        if (payload?.error) message = payload.error;
+      } catch {}
+      throw new Error(message);
+    }
+
+    const blob = await resp.blob();
+    const href = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const disposition = resp.headers.get('Content-Disposition') || '';
+    const filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
+    link.href = href;
+    link.download = filenameMatch?.[1] || `mr-${mr.iid}-comments.md`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(href), 0);
   }
 
   // ── MR ranking ───────────────────────────────────────────
