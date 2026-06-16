@@ -103,14 +103,45 @@
         <button class="btn btn-sm btn-danger" id="clearDone">Clear done</button>
       </div>
       <div class="add-todo">
-        <input type="text" id="todoInput" placeholder="Add a todo… press Enter" maxlength="500" autocomplete="off">
+        <input type="text" id="todoInput" placeholder="Add a todo… press Enter" maxlength="500" autocomplete="one-time-code">
         <button class="btn btn-primary btn-sm" id="addTodoBtn">Add</button>
       </div>
       <div id="localBody" class="section-body">
         <div class="empty"><span class="empty-icon">📋</span>No todos yet</div>
       </div>
     </div>
+    <!-- ── Epic Panel ── -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title">
+          <div class="section-icon jira">📌</div>
+          Epic Work
+          <span class="section-count" id="epicCount">–</span>
+        </div>
+        <button class="btn btn-sm btn-icon" id="refreshEpic" title="Refresh Epic">
+          ↻
+        </button>
+      </div>
 
+      <div class="add-todo">
+        <input id="epicKeyInput" placeholder="Epic key (e.g. TROL-123)" />
+        <button class="btn btn-sm" id="setEpicBtn">Set</button>
+      </div>
+
+      <div class="add-todo">
+        <select id="epicType">
+          <option value="Story">Story</option>
+          <option value="Bug">Bug</option>
+          <option value="Task">Task</option>
+        </select>
+        <input id="epicNewInput" placeholder="Create child issue…"  autocomplete="one-time-code"/>
+        <button class="btn btn-primary btn-sm" id="createEpicIssueBtn">Add</button>
+      </div>
+
+      <div id="epicBody" class="section-body">
+        <div class="empty">No epic selected</div>
+      </div>
+    </div>
   </div>
 </main>
 
@@ -143,7 +174,7 @@
         </div>
         <div class="form-group">
           <label class="form-label" for="s-jira-token">API Token</label>
-          <input class="form-input" id="s-jira-token" type="password" placeholder="Your Jira API token">
+          <input class="form-input" id="s-jira-token" type="password" placeholder="Your Jira API token" autocomplete="new-password">
           <div class="form-hint">Create one at <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener">id.atlassian.com → API tokens</a></div>
         </div>
         <div class="form-section">
@@ -174,7 +205,7 @@
         </div>
         <div class="form-group">
           <label class="form-label" for="s-gitlab-token">Personal Access Token</label>
-          <input class="form-input" id="s-gitlab-token" type="password" placeholder="glpat-xxxxxxxxxxxxxxxxxxxx">
+          <input class="form-input" id="s-gitlab-token" type="password" placeholder="glpat-xxxxxxxxxxxxxxxxxxxx" autocomplete="new-password">
           <div class="form-hint">GitLab → User Settings → Access Tokens — needs <code>read_api</code> scope</div>
         </div>
       </div>
@@ -232,6 +263,7 @@
   const KEY_TIME_ENTRIES     = 'devtodo_time_entries';
   const KEY_TIME_ACTIVE      = 'devtodo_time_active';
   const KEY_TIME_SUGGESTIONS = 'devtodo_time_suggestions';
+  const KEY_EPIC = 'devtodo_epic';
 
   // ── Default settings ──────────────────────────────────────
   const DEFAULT = {
@@ -246,6 +278,7 @@
   let timeEntries     = loadTimeEntries();
   let activeEntry     = loadActiveEntry();
   let timeSuggestions = loadSuggestions();
+  let activeEpic = localStorage.getItem(KEY_EPIC) || '';
   let reportDate      = new Date().toISOString().slice(0, 10);
   let reportTab       = 'log';
   let summarySelection = new Set();
@@ -716,6 +749,40 @@
     return jiraFetch(jql);
   }
 
+async function fetchEpicChildren(epicKey) {
+  const jql = `
+    parent = ${epicKey}
+    AND statusCategory = "To Do"
+    ORDER BY created DESC
+  `;
+  return jiraFetch(jql);
+}
+
+ async function createEpicIssue(summary, type) {
+  const { url, email, token } = settings.jira;
+  const auth = btoa(`${email}:${token}`);
+
+  const resp = await fetch(`/proxy/jira/rest/api/3/issue`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Jira-Auth': `Basic ${auth}`,
+      'X-Jira-Base': url.replace(/\/+$/, '')
+    },
+    body: JSON.stringify({
+      fields: {
+        project: { key: activeEpic.split('-')[0] },
+        summary,
+        issuetype: { name: type },
+        parent: { key: activeEpic }   
+      }
+    })
+  });
+
+  if (!resp.ok) {
+    throw new Error(await resp.text());
+  }
+}
   function issueTypeIcon(name) {
     const n = (name || '').toLowerCase();
     if (n.includes('bug'))     return '🐛';
@@ -882,6 +949,40 @@
       countEl.textContent = '!';
     } finally {
       $id('refreshJira').disabled = false;
+    }
+  }
+
+  async function loadEpicPanel() {
+    const body = $id('epicBody');
+    const countEl = $id('epicCount');
+
+    if (!activeEpic) {
+      body.innerHTML = `<div class="empty">No epic selected</div>`;
+      countEl.textContent = '–';
+      return;
+    }
+
+    body.innerHTML = `<div class="loading">Loading…</div>`;
+
+    try {
+      const issues = await fetchEpicChildren(activeEpic);
+
+      body.innerHTML = '';
+
+      if (!issues.length) {
+        body.innerHTML = `<div class="empty">No open child items</div>`;
+      } else {
+        issues.forEach(issue => {
+          const el = buildJiraItem(issue, false);
+          body.appendChild(el);
+        });
+      }
+
+      countEl.textContent = issues.length;
+
+    } catch (e) {
+      body.innerHTML = `<div class="error-state">⚠️ ${esc(e.message)}</div>`;
+      countEl.textContent = '!';
     }
   }
 
@@ -1258,6 +1359,42 @@
     loadGitLab();
   });
 
+  $id('setEpicBtn').addEventListener('click', () => {
+  activeEpic = $id('epicKeyInput').value.trim();
+  localStorage.setItem(KEY_EPIC, activeEpic);
+  loadEpicPanel();
+});
+
+  $id('refreshEpic').addEventListener('click', loadEpicPanel);
+
+  $id('createEpicIssueBtn').addEventListener('click', async () => {
+    const input = $id('epicNewInput');
+    const type  = $id('epicType').value;
+
+    if (!input.value.trim()) return;
+
+    try {
+      await createEpicIssue(input.value.trim(), type);
+      input.value = '';
+      loadEpicPanel();
+    } catch (e) {
+      alert(e.message);
+    }
+  });
+
+  $id('epicNewInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      const input = $id('epicNewInput');
+      const type  = $id('epicType').value;
+      if (input.value.trim()) {
+        createEpicIssue(input.value.trim(), type).then(() => {
+          input.value = '';
+          setTimeout(loadEpicPanel, 800); // slight delay to allow Jira to process the new issue
+        }).catch(e => alert(e.message));
+      }
+    }
+  });
+
   // Tab switching
   document.querySelectorAll('.modal-tab').forEach(tab => {
     tab.addEventListener('click', () => {
@@ -1326,6 +1463,7 @@
   renderTodos();
   loadJira();
   loadGitLab();
+  loadEpicPanel();
 })();
 </script>
 </body>

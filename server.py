@@ -35,6 +35,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self._cors_headers(200)
         self.end_headers()
 
+    # ── POST ──────────────────────────────────────────────────────────────────
+    def do_POST(self):
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path.startswith('/proxy/jira/'):
+            self._proxy_jira(parsed, method='POST')
+        else:
+            self.send_error(404)
+
     # ── GET ───────────────────────────────────────────────────────────────────
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -57,7 +65,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self.send_error(404)
 
     # ── Proxy: Jira ───────────────────────────────────────────────────────────
-    def _proxy_jira(self, parsed):
+    def _proxy_jira(self, parsed, method='GET'):
         auth = self.headers.get('X-Jira-Auth', '').strip()
         base = self.headers.get('X-Jira-Base', '').strip().rstrip('/')
 
@@ -70,7 +78,15 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if parsed.query:
             url += '?' + parsed.query
 
-        self._forward(url, {'Authorization': auth, 'Accept': 'application/json'})
+        headers = {'Authorization': auth, 'Accept': 'application/json'}
+
+        body = None
+        if method == 'POST':
+            length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(length) if length else b''
+            headers['Content-Type'] = self.headers.get('Content-Type', 'application/json')
+
+        self._forward(url, headers, method=method, body=body)
 
     # ── Proxy: GitLab ─────────────────────────────────────────────────────────
     def _proxy_gitlab(self, parsed):
@@ -203,14 +219,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._json_error(502, str(exc))
 
     # ── HTTP forwarding ───────────────────────────────────────────────────────
-    def _forward(self, url, headers):
+    def _forward(self, url, headers, method='GET', body=None):
         # Allow self-signed certs on internal instances (GitLab on-prem etc.)
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
 
         try:
-            req = urllib.request.Request(url, headers=headers)
+            req = urllib.request.Request(url, headers=headers, data=body, method=method)
             with urllib.request.urlopen(req, timeout=20, context=ctx) as resp:
                 data = resp.read()
                 self._cors_headers(resp.status)
@@ -247,9 +263,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def _cors_headers(self, status):
         self.send_response(status)
         self.send_header('Access-Control-Allow-Origin', f'http://{BIND}:{PORT}')
-        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers',
-                         'X-Jira-Auth, X-Jira-Base, X-Gitlab-Token, X-Gitlab-Base')
+                         'X-Jira-Auth, X-Jira-Base, X-Gitlab-Token, X-Gitlab-Base, Content-Type')
 
     def _json_error(self, code, message):
         body = json.dumps({'error': message}).encode()
