@@ -949,6 +949,8 @@
                          '<span class="mr-role mr-role-reviewer">Reviewer</span>'
     ).join('');
 
+    const downloadButton =mr._roles.map( r => r == 'assignee' ? `<button class="btn btn-sm btn-export-comments" title="Download review comments as Markdown">Comments</button>` : '').join('');
+
     const a = document.createElement('a');
     a.href      = mr.web_url;
     a.target    = '_blank';
@@ -967,26 +969,28 @@
         </div>
       </div>
       <div class="item-actions">
-        <button class="btn btn-sm btn-export-comments" title="Download review comments as Markdown">Comments</button>
+        ${downloadButton}
         <button class="btn btn-sm btn-track" title="Track time">▶</button>
       </div>`;
-    a.querySelector('.btn-export-comments').addEventListener('click', async e => {
-      e.preventDefault();
-      e.stopPropagation();
-      const button = e.currentTarget;
-      const originalText = button.textContent;
-      button.disabled = true;
-      button.textContent = '…';
-      try {
-        await downloadMrComments(mr);
-      } catch (err) {
-        const message = err?.message || 'Failed to download MR comments.';
-        window.alert(message);
-      } finally {
-        button.disabled = false;
-        button.textContent = originalText;
-      }
-    });
+    if (mr._roles.includes('assignee')) {
+      a.querySelector('.btn-export-comments').addEventListener('click', async e => {
+        e.preventDefault();
+        e.stopPropagation();
+        const button = e.currentTarget;
+        const originalText = button.textContent;
+        button.disabled = true;
+        button.textContent = '…';
+        try {
+          await downloadMrComments(mr);
+        } catch (err) {
+          const message = err?.message || 'Failed to download MR comments.';
+          window.alert(message);
+        } finally {
+          button.disabled = false;
+          button.textContent = originalText;
+        }
+      });
+    }
     a.querySelector('.btn-track').addEventListener('click', e => {
       e.preventDefault(); e.stopPropagation();
       clockIn(trackLabel, 'gitlab');
