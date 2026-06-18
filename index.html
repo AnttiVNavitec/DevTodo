@@ -11,6 +11,7 @@
 <header class="header">
   <div class="logo">Dev<span>Todo</span></div>
   <div class="header-actions">
+    <div class="header-week">Week <span id="currentWeek">-</span></div>
     <button class="btn btn-icon" id="refreshAll" title="Refresh Jira & GitLab">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" id="refreshIcon">
         <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
@@ -115,7 +116,7 @@
       <div class="section-header">
         <div class="section-title">
           <div class="section-icon jira">📌</div>
-          Epic Work
+          <span id="epicName">Epic Work</span>
           <span class="section-count" id="epicCount">–</span>
         </div>
         <button class="btn btn-sm btn-icon" id="refreshEpic" title="Refresh Epic">
@@ -318,6 +319,27 @@
   }
 
   function $id(id) { return document.getElementById(id); }
+
+  function getCalendarWeek(date = new Date()) {
+    // Copy date so we don't modify original
+    const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+
+    // Set to nearest Thursday (ISO rule)
+    d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+
+    // Start of the year
+    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+
+    // Calculate full weeks to nearest Thursday
+    const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+
+    return weekNo;
+  }
+
+  // ── Header ───────────────────────────────────────────────
+  function updateWeekNumber() {
+    $id('currentWeek').textContent = getCalendarWeek();
+  }
 
   // ── Time tracking storage ──────────────────────────────────
   function loadTimeEntries() {
@@ -955,9 +977,11 @@ async function fetchEpicChildren(epicKey) {
   async function loadEpicPanel() {
     const body = $id('epicBody');
     const countEl = $id('epicCount');
+    const nameEl = $id('epicName');
 
     if (!activeEpic) {
       body.innerHTML = `<div class="empty">No epic selected</div>`;
+      nameEl.textContent = 'Epic work';
       countEl.textContent = '–';
       return;
     }
@@ -979,6 +1003,7 @@ async function fetchEpicChildren(epicKey) {
       }
 
       countEl.textContent = issues.length;
+      nameEl.textContent = `Epic: ${activeEpic}`;
 
     } catch (e) {
       body.innerHTML = `<div class="error-state">⚠️ ${esc(e.message)}</div>`;
@@ -1460,6 +1485,8 @@ async function fetchEpicChildren(epicKey) {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') checkAutoClockout();
   });
+  updateWeekNumber();
+  setInterval(updateWeekNumber, 60 * 60 * 1000);
   renderTodos();
   loadJira();
   loadGitLab();
