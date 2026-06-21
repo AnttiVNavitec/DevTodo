@@ -51,6 +51,10 @@
           Jira Issues
           <span class="section-count" id="jiraCount">–</span>
         </div>
+        <label class="checkbox-label">
+          <input type="checkbox" id="showUnassigned">
+          Show unassigned internal support tickets
+        </label>
         <button class="btn btn-sm btn-icon" id="refreshJira" title="Refresh Jira">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
@@ -59,12 +63,6 @@
             <path d="M8 16H3v5"/>
           </svg>
         </button>
-      </div>
-      <div class="options-bar">
-        <label class="checkbox-label">
-          <input type="checkbox" id="showUnassigned">
-          Show unassigned internal support tickets
-        </label>
       </div>
       <div id="jiraBody" class="section-body">
         <div class="config-needed">⚙️ Configure Jira in Settings<p>Add your Jira URL and API credentials to get started.</p></div>
@@ -114,19 +112,16 @@
     <!-- ── Epic Panel ── -->
     <div class="section">
       <div class="section-header">
+        <a href ="#" target="_blank" id="epicLink" style="text-decoration:none;color:inherit">
         <div class="section-title">
           <div class="section-icon jira">📌</div>
           <span id="epicName">Epic Work</span>
           <span class="section-count" id="epicCount">–</span>
         </div>
+        </a>
         <button class="btn btn-sm btn-icon" id="refreshEpic" title="Refresh Epic">
           ↻
         </button>
-      </div>
-
-      <div class="add-todo">
-        <input id="epicKeyInput" placeholder="Epic key (e.g. TROL-123)" />
-        <button class="btn btn-sm" id="setEpicBtn">Set</button>
       </div>
 
       <div class="add-todo">
@@ -190,6 +185,11 @@
             <input class="form-input" id="s-jira-support-status" placeholder="To Do">
             <div class="form-hint">Exact status name used for unstarted tickets in your support project</div>
           </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="s-jira-epic">Pinned Epic Key</label>
+          <input class="form-input" id="s-jira-epic" placeholder="Epic key (e.g. TROL-123)" />
+          <div class="form-hint">Show issues from this epic and easily create new ones</div>
         </div>
       </div>
 
@@ -775,6 +775,7 @@ async function fetchEpicChildren(epicKey) {
   const jql = `
     parent = ${epicKey}
     AND statusCategory = "To Do"
+    AND assignee is EMPTY
     ORDER BY created DESC
   `;
   return jiraFetch(jql);
@@ -978,6 +979,10 @@ async function fetchEpicChildren(epicKey) {
     const body = $id('epicBody');
     const countEl = $id('epicCount');
     const nameEl = $id('epicName');
+    const linkEl = $id('epicLink');
+    const baseUrl   = settings.jira.url.replace(/\/+$/, '');
+
+    const activeEpic = settings.jira.activeEpic;
 
     if (!activeEpic) {
       body.innerHTML = `<div class="empty">No epic selected</div>`;
@@ -1004,7 +1009,7 @@ async function fetchEpicChildren(epicKey) {
 
       countEl.textContent = issues.length;
       nameEl.textContent = `Epic: ${activeEpic}`;
-
+      linkEl.href = `${baseUrl}/browse/${activeEpic}`;
     } catch (e) {
       body.innerHTML = `<div class="error-state">⚠️ ${esc(e.message)}</div>`;
       countEl.textContent = '!';
@@ -1324,6 +1329,7 @@ async function fetchEpicChildren(epicKey) {
     $id('s-jira-token').value          = settings.jira.token;
     $id('s-jira-support').value        = settings.jira.supportProject;
     $id('s-jira-support-status').value = settings.jira.supportStatus || 'To Do';
+    $id('s-jira-epic').value           = settings.jira.activeEpic || '';
     $id('s-gitlab-url').value          = settings.gitlab.url;
     $id('s-gitlab-username').value     = settings.gitlab.username;
     $id('s-gitlab-token').value        = settings.gitlab.token;
@@ -1342,6 +1348,7 @@ async function fetchEpicChildren(epicKey) {
         token:          $id('s-jira-token').value.trim(),
         supportProject: $id('s-jira-support').value.trim(),
         supportStatus:  $id('s-jira-support-status').value.trim() || 'To Do',
+        activeEpic:     $id('s-jira-epic').value.trim(),
       },
       gitlab: {
         url:      $id('s-gitlab-url').value.trim(),
@@ -1382,13 +1389,10 @@ async function fetchEpicChildren(epicKey) {
     closeSettings();
     loadJira();
     loadGitLab();
+    loadEpicPanel();
+
   });
 
-  $id('setEpicBtn').addEventListener('click', () => {
-  activeEpic = $id('epicKeyInput').value.trim();
-  localStorage.setItem(KEY_EPIC, activeEpic);
-  loadEpicPanel();
-});
 
   $id('refreshEpic').addEventListener('click', loadEpicPanel);
 

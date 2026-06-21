@@ -103,6 +103,14 @@
       border-radius: var(--radius);
       overflow: hidden;
     }
+    
+    .section-body { 
+      max-height: 400px;
+      overflow-y: auto;
+      scrollbar-gutter: stable;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
 
     .section-header {
       padding: 12px 14px;
