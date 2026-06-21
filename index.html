@@ -1069,6 +1069,26 @@ async function fetchEpicChildren(epicKey) {
     return mrs;
   }
 
+  function discombobulateName(name) {
+    // GitLab MR titles often start with a ticket key like "PROJ-1234: Fix this thing"
+    // We want to extract the "Fix this thing" part for better readability in the tracker
+    const parts = name.split(/[:\-]\s+/);
+    const step1 = parts.length > 1 ? parts.slice(1).join(': ').trim() : name;
+    // This still has the form: "Merge JIRA-123-some-ticket to Develop"
+    // We can further clean it up by removing common prefixes and suffixes
+
+    const match = step1.match(/^Merge\s+(\S+)\s+to\s+(\S+)/i);
+    if (match) {
+      const titlePart = match[1];
+      const branchnamePart = match[2].slice(0,60);
+      return [titlePart, branchnamePart];
+    }
+    else
+    {
+      return [step1, ''];
+    }
+  }
+
   function buildGitLabItem(mr) {
     const isDraft      = mr.draft || mr.work_in_progress;
     const projectPath  = mr.references?.full?.split('!')?.at(0) ?? '';
@@ -1081,7 +1101,7 @@ async function fetchEpicChildren(epicKey) {
     ).join('');
 
     const downloadButton =mr._roles.map( r => r == 'assignee' ? `<button class="btn btn-sm btn-export-comments" title="Download review comments as Markdown">Comments</button>` : '').join('');
-
+    const nameParts = discombobulateName(mr.title);
     const a = document.createElement('a');
     a.href      = mr.web_url;
     a.target    = '_blank';
@@ -1091,9 +1111,9 @@ async function fetchEpicChildren(epicKey) {
     a.innerHTML = `
       <div class="item-icon">${isDraft ? '📝' : '🔀'}</div>
       <div class="item-content">
-        <div class="item-title" title="${esc(mr.title)}">${esc(mr.title)}</div>
+        <div class="item-title" title="${esc(mr.title)}">${esc(nameParts[0])}</div>
         <div class="item-meta">
-          <span class="item-key" title="${esc(projectPath)}">!${mr.iid} ${esc(projectName)}</span>
+          <span class="item-key" title="${esc(projectPath)}">!${mr.iid} ${esc(projectName)} ⎇ ${esc(nameParts[1])}</span>
           ${isDraft ? '<span class="badge badge-gray">Draft</span>' : ''}
           ${mr.approved ? '<span class="badge badge-green">Approved</span>' : ''}
           ${roleHtml}
