@@ -38,6 +38,19 @@
   </div>
 </header>
 
+<div id="pomodoroBar" class="pomodoro-bar">
+  <span class="pomo-icon">🍅</span>
+  <span class="pomo-phase" id="pomoPhase">Pomodoro</span>
+  <span class="pomo-timer" id="pomoTimer">25:00</span>
+  <div class="pomo-actions">
+    <button class="btn btn-sm" id="pomoStartBtn">▶ Start</button>
+    <button class="btn btn-sm btn-danger" id="pomoInterruptBtn" style="display:none">✕ Interrupt</button>
+    <button class="btn btn-sm" id="pomoSkipBtn" style="display:none">Skip break</button>
+  </div>
+  <div style="flex:1"></div>
+  <span class="pomo-counts" id="pomoCounts"></span>
+</div>
+
 <div id="trackerBar" class="tracker-bar"></div>
 
 <main class="main">
@@ -264,7 +277,13 @@
   const KEY_TIME_ENTRIES     = 'devtodo_time_entries';
   const KEY_TIME_ACTIVE      = 'devtodo_time_active';
   const KEY_TIME_SUGGESTIONS = 'devtodo_time_suggestions';
-  const KEY_EPIC = 'devtodo_epic';
+  const KEY_EPIC             = 'devtodo_epic';
+  const KEY_POMO_STATE       = 'devtodo_pomo_state';
+  const KEY_POMO_CYCLES      = 'devtodo_pomo_cycles';
+  const KEY_CTX_SWITCHES     = 'devtodo_ctx_switches';
+
+  const POMO_WORK_MS  = 25 * 60 * 1000;
+  const POMO_BREAK_MS =  5 * 60 * 1000;
 
   // ── Default settings ──────────────────────────────────────
   const DEFAULT = {
@@ -283,6 +302,9 @@
   let reportDate      = new Date().toISOString().slice(0, 10);
   let reportTab       = 'log';
   let summarySelection = new Set();
+  let pomoState   = loadPomoState();
+  let pomoCycles  = loadPomoCycles();
+  let ctxSwitches = loadCtxSwitches();
 
   // ── Helpers ───────────────────────────────────────────────
   function loadSettings() {
@@ -364,6 +386,43 @@
     const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
     timeEntries = timeEntries.filter(e => new Date(e.startedAt).getTime() >= cutoff);
     saveTimeEntries();
+    pomoCycles  = pomoCycles.filter(c => new Date(c.date + 'T12:00:00').getTime() >= cutoff);
+    savePomoCycles();
+    ctxSwitches = ctxSwitches.filter(s => new Date(s.date + 'T12:00:00').getTime() >= cutoff);
+    saveCtxSwitches();
+  }
+
+  function loadPomoState() {
+    try { return JSON.parse(localStorage.getItem(KEY_POMO_STATE) || 'null'); }
+    catch { return null; }
+  }
+  function savePomoState() { localStorage.setItem(KEY_POMO_STATE, JSON.stringify(pomoState)); }
+
+  function loadPomoCycles() {
+    try { return JSON.parse(localStorage.getItem(KEY_POMO_CYCLES) || '[]'); }
+    catch { return []; }
+  }
+  function savePomoCycles() { localStorage.setItem(KEY_POMO_CYCLES, JSON.stringify(pomoCycles)); }
+
+  function loadCtxSwitches() {
+    try { return JSON.parse(localStorage.getItem(KEY_CTX_SWITCHES) || '[]'); }
+    catch { return []; }
+  }
+  function saveCtxSwitches() { localStorage.setItem(KEY_CTX_SWITCHES, JSON.stringify(ctxSwitches)); }
+
+  function pomoCyclesForDate(dateStr) {
+    return pomoCycles.filter(c => c.date === dateStr);
+  }
+  function ctxSwitchesForDate(dateStr) {
+    return ctxSwitches.filter(s => s.date === dateStr).length;
+  }
+  function recordPomoCycle(type) {
+    pomoCycles.push({ date: todayStr(), type });
+    savePomoCycles();
+  }
+  function recordCtxSwitch() {
+    ctxSwitches.push({ date: todayStr() });
+    saveCtxSwitches();
   }
 
   /** Completed entries whose startedAt falls on the given YYYY-MM-DD date */
@@ -444,7 +503,118 @@
     return new Date(Math.min(cappedTs, Date.now())).toISOString();
   }
 
+  // ── Pomodoro timer ───────────────────────────────────────
+  function pomoStart() {
+    pomoState = { phase: 'work', startedAt: new Date().toISOString(), durationMs: POMO_WORK_MS };
+    savePomoState();
+    renderPomo();
+  }
+
+  function pomoInterrupt() {
+    if (!pomoState) return;
+    if (pomoState.phase === 'work') recordPomoCycle('interrupted');
+    pomoState = null;
+    savePomoState();
+    renderPomo();
+  }
+
+  function pomoSkipBreak() {
+    pomoState = null;
+    savePomoState();
+    renderPomo();
+  }
+
+  function buildDayStats(dateStr) {
+    const cycles     = pomoCyclesForDate(dateStr);
+    const completed  = cycles.filter(c => c.type === 'completed').length;
+    const interrupted = cycles.filter(c => c.type === 'interrupted').length;
+    const switches   = ctxSwitchesForDate(dateStr);
+    if (!completed && !interrupted && !switches) return '';
+    const parts = [];
+    parts.push(`<span class="report-stat">🍅 <strong>${completed}</strong> pomodoro${completed !== 1 ? 's' : ''}</span>`);
+    if (interrupted) parts.push(`<span class="report-stat report-stat-warn">✕ <strong>${interrupted}</strong> interrupted</span>`);
+    if (switches) parts.push(`<span class="report-stat">⇄ <strong>${switches}</strong> context switch${switches !== 1 ? 'es' : ''}</span>`);
+    return `<div class="report-day-stats">${parts.join('')}</div>`;
+  }
+
+  function renderPomo() {
+    const phase    = $id('pomoPhase');
+    const timerEl  = $id('pomoTimer');
+    const startBtn = $id('pomoStartBtn');
+    const intBtn   = $id('pomoInterruptBtn');
+    const skipBtn  = $id('pomoSkipBtn');
+    const counts   = $id('pomoCounts');
+    if (!phase || !timerEl) return;
+
+    // Advance expired state
+    if (pomoState) {
+      const elapsed = Date.now() - new Date(pomoState.startedAt).getTime();
+      if (elapsed >= pomoState.durationMs) {
+        if (pomoState.phase === 'work') {
+          recordPomoCycle('completed');
+          const workEnd    = new Date(pomoState.startedAt).getTime() + pomoState.durationMs;
+          const breakElapsed = Date.now() - workEnd;
+          if (breakElapsed >= POMO_BREAK_MS) {
+            pomoState = null;
+          } else {
+            const adjustedStart = new Date(workEnd).toISOString();
+            pomoState = { phase: 'break', startedAt: adjustedStart, durationMs: POMO_BREAK_MS };
+          }
+        } else {
+          pomoState = null;
+        }
+        savePomoState();
+      }
+    }
+
+    // Daily stats display
+    const today      = todayStr();
+    const dayCycles  = pomoCyclesForDate(today);
+    const done       = dayCycles.filter(c => c.type === 'completed').length;
+    const interrupted = dayCycles.filter(c => c.type === 'interrupted').length;
+    const switches   = ctxSwitchesForDate(today);
+    const parts      = [];
+    if (done)        parts.push(`🍅 ${done}`);
+    if (interrupted) parts.push(`✕ ${interrupted}`);
+    if (switches)    parts.push(`⇄ ${switches}`);
+    counts.textContent = parts.join('  ·  ');
+    counts.title = `${done} completed · ${interrupted} interrupted · ${switches} context switches today`;
+
+    if (!pomoState) {
+      phase.textContent = 'Pomodoro';
+      phase.style.color = '';
+      timerEl.textContent = '25:00';
+      timerEl.style.color = '';
+      startBtn.style.display = '';
+      intBtn.style.display   = 'none';
+      skipBtn.style.display  = 'none';
+    } else {
+      const remaining = Math.max(0, pomoState.durationMs - (Date.now() - new Date(pomoState.startedAt).getTime()));
+      const mins = Math.floor(remaining / 60000);
+      const secs = Math.floor((remaining % 60000) / 1000);
+      timerEl.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+      if (pomoState.phase === 'work') {
+        phase.textContent    = 'Work';
+        phase.style.color    = 'var(--local-green)';
+        timerEl.style.color  = 'var(--local-green)';
+        startBtn.style.display = 'none';
+        intBtn.style.display   = '';
+        skipBtn.style.display  = 'none';
+      } else {
+        phase.textContent    = 'Break';
+        phase.style.color    = 'var(--jira-blue)';
+        timerEl.style.color  = 'var(--jira-blue)';
+        startBtn.style.display = 'none';
+        intBtn.style.display   = 'none';
+        skipBtn.style.display  = '';
+      }
+    }
+  }
+
   function clockIn(label, type) {
+    if (activeEntry && activeEntry.label !== label) {
+      recordCtxSwitch();
+    }
     if (activeEntry) {
       activeEntry.endedAt = new Date().toISOString();
       timeEntries.push(activeEntry);
@@ -591,6 +761,7 @@
         <span class="report-date-label">${esc(display)}</span>
         <button class="btn btn-sm btn-icon" id="reportNext" ${nextDis}>›</button>
       </div>
+      ${buildDayStats(reportDate)}
       <div class="report-tabs">
         <button class="report-tab${reportTab === 'log' ? ' active' : ''}" data-rtab="log">Log</button>
         <button class="report-tab${reportTab === 'summary' ? ' active' : ''}" data-rtab="summary">Summary</button>
@@ -1379,6 +1550,10 @@ async function fetchEpicChildren(epicKey) {
   }
 
   // ── Event wiring ──────────────────────────────────────────
+  $id('pomoStartBtn').addEventListener('click', pomoStart);
+  $id('pomoInterruptBtn').addEventListener('click', pomoInterrupt);
+  $id('pomoSkipBtn').addEventListener('click', pomoSkipBreak);
+
   $id('openSettings').addEventListener('click', openSettings);
   $id('closeSettings').addEventListener('click', closeSettings);
   $id('cancelSettings').addEventListener('click', closeSettings);
@@ -1504,7 +1679,8 @@ async function fetchEpicChildren(epicKey) {
   }
   checkAutoClockout();
   renderTracker();
-  setInterval(renderTracker, 1000);
+  renderPomo();
+  setInterval(() => { renderTracker(); renderPomo(); }, 1000);
   setInterval(checkAutoClockout, 5 * 60 * 1000);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') checkAutoClockout();

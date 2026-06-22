@@ -471,6 +471,45 @@
       gap: 7px;
     }
 
+    /* ── Pomodoro bar ── */
+    .pomodoro-bar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+      height: 36px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      position: sticky;
+      top: 54px;
+      z-index: 99;
+    }
+    .pomo-icon { font-size: 13px; flex-shrink: 0; line-height: 1; }
+    .pomo-phase {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--text-subtle);
+      flex-shrink: 0;
+      min-width: 36px;
+    }
+    .pomo-timer {
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      font-size: 13px;
+      font-weight: 700;
+      flex-shrink: 0;
+      min-width: 38px;
+    }
+    .pomo-actions { display: flex; gap: 4px; flex-shrink: 0; }
+    .pomo-counts {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
+
     /* ── Tracker bar ── */
     .tracker-bar {
       background: var(--surface);
@@ -481,8 +520,8 @@
       align-items: center;
       gap: 10px;
       position: sticky;
-      top: 54px;
-      z-index: 99;
+      top: 90px;
+      z-index: 98;
     }
     .tracker-dot {
       width: 7px; height: 7px;
@@ -644,6 +683,25 @@
       color: var(--text-subtle);
       text-align: center;
     }
+
+    /* ── Day stats in time report ── */
+    .report-day-stats {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+    .report-stat {
+      font-size: 11px;
+      color: var(--text-muted);
+      background: var(--bg);
+      padding: 3px 8px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    .report-stat strong { color: var(--text); }
+    .report-stat-warn strong { color: var(--yellow); }
 
     @media (max-width: 640px) {
       .report-summary-actions { align-items: stretch; }
