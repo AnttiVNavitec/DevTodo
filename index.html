@@ -620,13 +620,18 @@
     if (activeEntry && activeEntry.label !== label) {
       recordCtxSwitch();
     }
+    const switchTime = add15Min ? new Date(Date.now() - 15 * 60000).toISOString() : new Date().toISOString();
     if (activeEntry) {
-      activeEntry.endedAt = new Date().toISOString();
+      activeEntry.endedAt = switchTime;
+      //Check that the endedAt is not before the startedAt, if so, set endedAt to startedAt + 1 minute
+      //This could happen when using the add15Min option
+      if (new Date(activeEntry.endedAt) < new Date(activeEntry.startedAt)) {
+        activeEntry.endedAt = new Date(new Date(activeEntry.startedAt).getTime() + 60000).toISOString();
+      }
       timeEntries.push(activeEntry);
       saveTimeEntries();
     }
-    const startedAt = add15Min ? new Date(Date.now() - 15 * 60000).toISOString() : new Date().toISOString();
-    activeEntry = { id: Date.now(), label, type, startedAt, endedAt: null };
+    activeEntry = { id: Date.now(), label, type, startedAt: switchTime, endedAt: null };
     saveActiveEntry();
     renderTracker();
   }
