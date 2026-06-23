@@ -520,8 +520,8 @@
       align-items: center;
       gap: 10px;
       position: sticky;
-      top: 90px;
-      z-index: 98;
+      top: 54px;
+      z-index: 99;
     }
     .tracker-dot {
       width: 7px; height: 7px;

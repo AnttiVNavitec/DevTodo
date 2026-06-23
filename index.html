@@ -10,7 +10,20 @@
 
 <header class="header">
   <div class="logo">Dev<span>Todo</span></div>
+
   <div class="header-actions">
+    <div id="pomodoroBar" class="pomodoro-bar">
+      <span class="pomo-icon">🍅</span>
+      <span class="pomo-phase" id="pomoPhase">Pomodoro</span>
+      <span class="pomo-timer" id="pomoTimer">25:00</span>
+      <div class="pomo-actions">
+        <button class="btn btn-sm" id="pomoStartBtn">▶ Start</button>
+        <button class="btn btn-sm btn-danger" id="pomoInterruptBtn" style="display:none">✕ Interrupt</button>
+        <button class="btn btn-sm" id="pomoSkipBtn" style="display:none">Skip break</button>
+      </div>
+      <div style="flex:1"></div>
+      <span class="pomo-counts" id="pomoCounts"></span>
+    </div>
     <div class="header-week">Week <span id="currentWeek">-</span></div>
     <button class="btn btn-icon" id="refreshAll" title="Refresh Jira & GitLab">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" id="refreshIcon">
@@ -37,19 +50,6 @@
     </button>
   </div>
 </header>
-
-<div id="pomodoroBar" class="pomodoro-bar">
-  <span class="pomo-icon">🍅</span>
-  <span class="pomo-phase" id="pomoPhase">Pomodoro</span>
-  <span class="pomo-timer" id="pomoTimer">25:00</span>
-  <div class="pomo-actions">
-    <button class="btn btn-sm" id="pomoStartBtn">▶ Start</button>
-    <button class="btn btn-sm btn-danger" id="pomoInterruptBtn" style="display:none">✕ Interrupt</button>
-    <button class="btn btn-sm" id="pomoSkipBtn" style="display:none">Skip break</button>
-  </div>
-  <div style="flex:1"></div>
-  <span class="pomo-counts" id="pomoCounts"></span>
-</div>
 
 <div id="trackerBar" class="tracker-bar"></div>
 
@@ -248,6 +248,11 @@
       </div>
     </div>
     <div class="modal-footer">
+      <label class="checkbox-label">
+          <input type="checkbox" id="add15Min">
+          Started 15min ago
+      </label>
+      <div style="flex:1"></div>
       <button class="btn" id="cancelOtherWork">Cancel</button>
       <button class="btn btn-primary" id="submitOtherWork">▶ Start</button>
     </div>
@@ -611,7 +616,7 @@
     }
   }
 
-  function clockIn(label, type) {
+  function clockIn(label, type, add15Min) {
     if (activeEntry && activeEntry.label !== label) {
       recordCtxSwitch();
     }
@@ -620,7 +625,8 @@
       timeEntries.push(activeEntry);
       saveTimeEntries();
     }
-    activeEntry = { id: Date.now(), label, type, startedAt: new Date().toISOString(), endedAt: null };
+    const startedAt = add15Min ? new Date(Date.now() - 15 * 60000).toISOString() : new Date().toISOString();
+    activeEntry = { id: Date.now(), label, type, startedAt, endedAt: null };
     saveActiveEntry();
     renderTracker();
   }
@@ -717,13 +723,14 @@
 
   function submitOtherWork() {
     const val = $id('otherWorkInput').value.trim();
+    const add15Min = $id('add15Min').checked;
     if (!val) return;
     if (!timeSuggestions.includes(val)) {
       timeSuggestions.unshift(val);
       if (timeSuggestions.length > 50) timeSuggestions.pop();
       saveSuggestions();
     }
-    clockIn(val, 'other');
+    clockIn(val, 'other', add15Min);
     closeOtherWork();
   }
 
@@ -1078,7 +1085,7 @@ async function fetchEpicChildren(epicKey) {
       </div>`;
     a.querySelector('.btn-track').addEventListener('click', e => {
       e.preventDefault(); e.stopPropagation();
-      clockIn(trackLabel, 'jira');
+      clockIn(trackLabel, 'jira', false);
     });
     return a;
   }
@@ -1315,7 +1322,7 @@ async function fetchEpicChildren(epicKey) {
     }
     a.querySelector('.btn-track').addEventListener('click', e => {
       e.preventDefault(); e.stopPropagation();
-      clockIn(trackLabel, 'gitlab');
+      clockIn(trackLabel, 'gitlab', false);
     });
     return a;
   }
@@ -1492,7 +1499,7 @@ async function fetchEpicChildren(epicKey) {
       btn.addEventListener('click', e => {
         const id = Number(e.currentTarget.dataset.track);
         const t  = localTodos.find(x => x.id === id);
-        if (t) clockIn(t.text.slice(0, 80), 'local');
+        if (t) clockIn(t.text.slice(0, 80), 'local', false);
       });
     });
 
