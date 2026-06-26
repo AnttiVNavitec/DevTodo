@@ -169,6 +169,7 @@
       <div class="modal-tabs">
         <button class="modal-tab active" data-tab="jira">Jira</button>
         <button class="modal-tab" data-tab="gitlab">GitLab</button>
+        <button class="modal-tab" data-tab="pomo">Pomodoro</button>
       </div>
 
       <!-- Jira tab -->
@@ -222,6 +223,24 @@
           <label class="form-label" for="s-gitlab-token">Personal Access Token</label>
           <input class="form-input" id="s-gitlab-token" type="password" placeholder="glpat-xxxxxxxxxxxxxxxxxxxx" autocomplete="new-password">
           <div class="form-hint">GitLab → User Settings → Access Tokens — needs <code>read_api</code> scope</div>
+        </div>
+      </div>
+
+      <!-- Pomodoro tab -->
+      <div class="tab-content" id="tab-pomo">
+        <div class="form-group">
+          <label class="form-label" for="s-pomo-notification">Timer notification</label>
+          <select class="form-input" id="s-pomo-notification">
+            <option value="browser">Browser notification (OS popup)</option>
+            <option value="chime">Chime (audio)</option>
+            <option value="both">Both</option>
+            <option value="none">None</option>
+          </select>
+          <div class="form-hint">Notified when work or break phase ends — works even when the tab is not focused.</div>
+        </div>
+        <div class="form-group" id="pomo-notif-permission-row">
+          <div class="form-hint" id="pomo-notif-status"></div>
+          <button class="btn" id="pomo-request-permission" style="margin-top:6px">Grant browser notification permission</button>
         </div>
       </div>
     </div>
@@ -295,6 +314,7 @@
   const DEFAULT = {
     jira:   { url: '', email: '', token: '', supportProject: '', supportStatus: 'To Do' },
     gitlab: { url: 'https://gitlab.com', username: '', token: '' },
+    pomo:   { notification: 'browser' },
   };
 
   // ── State ─────────────────────────────────────────────────
@@ -308,9 +328,10 @@
   let reportDate      = new Date().toISOString().slice(0, 10);
   let reportTab       = 'log';
   let summarySelection = new Set();
-  let pomoState   = loadPomoState();
-  let pomoCycles  = loadPomoCycles();
-  let ctxSwitches = loadCtxSwitches();
+  let pomoState      = loadPomoState();
+  let pomoCycles     = loadPomoCycles();
+  let ctxSwitches    = loadCtxSwitches();
+  let pomoNotifiedAt = null;
 
   // ── Helpers ───────────────────────────────────────────────
   function loadSettings() {
@@ -510,6 +531,33 @@
   }
 
   // ── Pomodoro timer ───────────────────────────────────────
+  function pomoChime() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      [[0, 660], [150, 660], [300, 880]].forEach(([delayMs, freq]) => {
+        const t = ctx.currentTime + delayMs / 1000;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.frequency.value = freq;
+        osc.type = 'sine';
+        gain.gain.setValueAtTime(0.25, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+        osc.start(t); osc.stop(t + 0.45);
+      });
+    } catch (e) {}
+  }
+
+  function pomoNotify(title, body) {
+    const type = (settings.pomo || {}).notification || 'browser';
+    if (type === 'chime' || type === 'both') pomoChime();
+    if ((type === 'browser' || type === 'both') && typeof Notification !== 'undefined') {
+      if (Notification.permission === 'granted') {
+        new Notification(title, { body, silent: false });
+      }
+    }
+  }
+
   function pomoStart() {
     pomoState = { phase: 'work', startedAt: new Date().toISOString(), durationMs: POMO_WORK_MS };
     savePomoState();
@@ -557,6 +605,10 @@
       const elapsed = Date.now() - new Date(pomoState.startedAt).getTime();
       if (elapsed >= pomoState.durationMs) {
         if (pomoState.phase === 'work') {
+          if (pomoState.startedAt !== pomoNotifiedAt) {
+            pomoNotifiedAt = pomoState.startedAt;
+            pomoNotify('Pomodoro complete!', 'Time to take a break.');
+          }
           recordPomoCycle('completed');
           const workEnd    = new Date(pomoState.startedAt).getTime() + pomoState.durationMs;
           const breakElapsed = Date.now() - workEnd;
@@ -567,6 +619,10 @@
             pomoState = { phase: 'break', startedAt: adjustedStart, durationMs: POMO_BREAK_MS };
           }
         } else {
+          if (pomoState.startedAt !== pomoNotifiedAt) {
+            pomoNotifiedAt = pomoState.startedAt;
+            pomoNotify('Break over!', 'Ready to get back to work?');
+          }
           pomoState = null;
         }
         savePomoState();
@@ -1527,6 +1583,29 @@ async function fetchEpicChildren(epicKey) {
   }
 
   // ── Settings Modal ────────────────────────────────────────
+  function updatePomoPermissionUI() {
+    const sel = $id('s-pomo-notification').value;
+    const needsBrowser = sel === 'browser' || sel === 'both';
+    const row = $id('pomo-notif-permission-row');
+    const status = $id('pomo-notif-status');
+    const btn = $id('pomo-request-permission');
+    if (!needsBrowser || typeof Notification === 'undefined') {
+      row.style.display = 'none';
+      return;
+    }
+    row.style.display = '';
+    if (Notification.permission === 'granted') {
+      status.textContent = '✓ Browser notifications are allowed.';
+      btn.style.display = 'none';
+    } else if (Notification.permission === 'denied') {
+      status.textContent = '✗ Notifications are blocked. Allow them in your browser site settings.';
+      btn.style.display = 'none';
+    } else {
+      status.textContent = 'Permission not yet granted.';
+      btn.style.display = '';
+    }
+  }
+
   function openSettings() {
     $id('s-jira-url').value            = settings.jira.url;
     $id('s-jira-email').value          = settings.jira.email;
@@ -1537,6 +1616,8 @@ async function fetchEpicChildren(epicKey) {
     $id('s-gitlab-url').value          = settings.gitlab.url;
     $id('s-gitlab-username').value     = settings.gitlab.username;
     $id('s-gitlab-token').value        = settings.gitlab.token;
+    $id('s-pomo-notification').value   = (settings.pomo || {}).notification || 'browser';
+    updatePomoPermissionUI();
     $id('settingsModal').classList.remove('hidden');
   }
 
@@ -1559,6 +1640,9 @@ async function fetchEpicChildren(epicKey) {
         username: $id('s-gitlab-username').value.trim(),
         token:    $id('s-gitlab-token').value.trim(),
       },
+      pomo: {
+        notification: $id('s-pomo-notification').value,
+      },
     };
   }
 
@@ -1570,6 +1654,10 @@ async function fetchEpicChildren(epicKey) {
   $id('openSettings').addEventListener('click', openSettings);
   $id('closeSettings').addEventListener('click', closeSettings);
   $id('cancelSettings').addEventListener('click', closeSettings);
+  $id('s-pomo-notification').addEventListener('change', updatePomoPermissionUI);
+  $id('pomo-request-permission').addEventListener('click', () => {
+    Notification.requestPermission().then(updatePomoPermissionUI);
+  });
 
   $id('openTimeReport').addEventListener('click', openTimeReport);
   $id('closeTimeReport').addEventListener('click', closeTimeReport);
