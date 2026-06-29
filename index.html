@@ -69,10 +69,6 @@
           <input type="checkbox" id="isSupportMode">
           IS mode
         </label>
-        <label class="checkbox-label">
-          <input type="checkbox" id="showUnassigned">
-          Show unassigned IS tickets
-        </label>
         <button class="btn btn-sm btn-icon" id="refreshJira" title="Refresh Jira">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
@@ -302,7 +298,6 @@
   // ── Storage keys ──────────────────────────────────────────
   const KEY_SETTINGS         = 'devtodo_settings';
   const KEY_TODOS            = 'devtodo_todos';
-  const KEY_UNASSIGNED       = 'devtodo_show_unassigned';
   const KEY_IS_MODE          = 'devtodo_is_mode';
   const KEY_TIME_ENTRIES     = 'devtodo_time_entries';
   const KEY_TIME_ACTIVE      = 'devtodo_time_active';
@@ -325,7 +320,6 @@
   // ── State ─────────────────────────────────────────────────
   let settings        = loadSettings();
   let localTodos      = loadTodos();
-  let showUnassigned  = localStorage.getItem(KEY_UNASSIGNED) === 'true';
   let isSupportMode   = localStorage.getItem(KEY_IS_MODE) === 'true';
   let timeEntries     = loadTimeEntries();
   let activeEntry     = loadActiveEntry();
@@ -1212,6 +1206,7 @@ async function fetchEpicChildren(epicKey) {
           <span class="badge ${statusBadgeClass(statusCat)}">${esc(status)}</span>
           <span class="badge badge-gray">${esc(typeName)}</span>
           ${isSupport ? '<span class="badge badge-yellow">Support</span>' : ''}
+          ${isUnassigned ? '<span class="badge badge-orange">Unassigned</span>' : ''}
         </div>
       </div>
       <div class="item-actions">
@@ -1261,10 +1256,9 @@ async function fetchEpicChildren(epicKey) {
     $id('refreshJira').disabled = true;
 
     try {
-      const fetchSupport = isSupportMode || showUnassigned;
       const [myIssues, supportIssues] = await Promise.all([
         fetchMyJiraIssues(),
-        fetchSupport ? fetchSupportTickets() : Promise.resolve([]),
+        isSupportMode ? fetchSupportTickets() : Promise.resolve([]),
       ]);
 
       body.innerHTML = '';
@@ -1283,19 +1277,12 @@ async function fetchEpicChildren(epicKey) {
           body.appendChild(buildJiraItem(i, isSupport, isUnassigned));
         });
       } else {
-        if (myIssues.length) {
-          const sorted = [...myIssues].sort(jiraMyIssueSort);
-          body.appendChild(divider(`My Issues (${sorted.length})`));
-          sorted.forEach(i => body.appendChild(buildJiraItem(i, false)));
-        }
-        if (showUnassigned && supportIssues.length) {
-          const sorted = [...supportIssues].sort(jiraSupportSort);
-          body.appendChild(divider(`Unassigned Support (${sorted.length})`));
-          sorted.forEach(i => body.appendChild(buildJiraItem(i, true, true)));
-        }
+        const sorted = [...myIssues].sort(jiraMyIssueSort);
+        body.appendChild(divider(`My Issues (${sorted.length})`));
+        sorted.forEach(i => body.appendChild(buildJiraItem(i, false)));
       }
 
-      countEl.textContent = myIssues.length + (fetchSupport ? supportIssues.length : 0);
+      countEl.textContent = myIssues.length + (isSupportMode ? supportIssues.length : 0);
     } catch (err) {
       let msg = err.message;
       if (/failed to fetch|networkerror|cors/i.test(msg)) {
@@ -1834,15 +1821,6 @@ async function fetchEpicChildren(epicKey) {
   isModeCb.addEventListener('change', e => {
     isSupportMode = e.target.checked;
     localStorage.setItem(KEY_IS_MODE, isSupportMode);
-    loadJira();
-  });
-
-  // Unassigned support toggle
-  const unassignedCb = $id('showUnassigned');
-  unassignedCb.checked = showUnassigned;
-  unassignedCb.addEventListener('change', e => {
-    showUnassigned = e.target.checked;
-    localStorage.setItem(KEY_UNASSIGNED, showUnassigned);
     loadJira();
   });
 
