@@ -22,6 +22,7 @@ from fetch_mr_comments import build_markdown, get_file_context, paginate, api_ge
 
 PORT = 8080
 BIND = "127.0.0.1"
+ALLOWED_ORIGINS = {f'http://localhost:{PORT}', f'http://127.0.0.1:{PORT}'}
 
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
@@ -72,8 +73,29 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             else:
                 self.send_error(404)
 
+    # ── Origin guard (applies to all proxy routes) ────────────────────────────
+    def _check_origin(self):
+        origin = self.headers.get('Origin', '').strip()
+        referer = self.headers.get('Referer', '').strip()
+        # Allow same-origin fetches (no Origin header on same-origin GET) and
+        # explicit browser requests from our own page only.
+        if not origin and not referer:
+            return True  # non-browser client (curl, server health-check)
+        if origin and origin not in ALLOWED_ORIGINS:
+            self._json_error(403, 'Forbidden: cross-origin request rejected')
+            return False
+        if not origin and referer:
+            # Referer includes path; check prefix
+            if not any(referer.startswith(o) for o in ALLOWED_ORIGINS):
+                self._json_error(403, 'Forbidden: cross-origin request rejected')
+                return False
+        return True
+
     # ── Proxy: Jira ───────────────────────────────────────────────────────────
     def _proxy_jira(self, parsed, method='GET'):
+        if not self._check_origin():
+            return
+
         auth = self.headers.get('X-Jira-Auth', '').strip()
         base = self.headers.get('X-Jira-Base', '').strip().rstrip('/')
 
@@ -98,6 +120,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
     # ── Proxy: GitLab ─────────────────────────────────────────────────────────
     def _proxy_gitlab(self, parsed):
+        if not self._check_origin():
+            return
+
         token = self.headers.get('X-Gitlab-Token', '').strip()
         base  = self.headers.get('X-Gitlab-Base', '').strip().rstrip('/')
 
@@ -113,6 +138,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self._forward(url, {'PRIVATE-TOKEN': token, 'Accept': 'application/json'})
 
     def _download_gitlab_mr_comments(self, parsed):
+        if not self._check_origin():
+            return
+
         token = self.headers.get('X-Gitlab-Token', '').strip()
         base = self.headers.get('X-Gitlab-Base', '').strip().rstrip('/')
 
