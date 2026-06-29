@@ -43,6 +43,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_error(404)
 
+    # ── PUT ───────────────────────────────────────────────────────────────────
+    def do_PUT(self):
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path.startswith('/proxy/jira/'):
+            self._proxy_jira(parsed, method='PUT')
+        else:
+            self.send_error(404)
+
     # ── GET ───────────────────────────────────────────────────────────────────
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -81,7 +89,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         headers = {'Authorization': auth, 'Accept': 'application/json'}
 
         body = None
-        if method == 'POST':
+        if method in ('POST', 'PUT'):
             length = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(length) if length else b''
             headers['Content-Type'] = self.headers.get('Content-Type', 'application/json')
@@ -263,7 +271,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def _cors_headers(self, status):
         self.send_response(status)
         self.send_header('Access-Control-Allow-Origin', f'http://{BIND}:{PORT}')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS')
         self.send_header('Access-Control-Allow-Headers',
                          'X-Jira-Auth, X-Jira-Base, X-Gitlab-Token, X-Gitlab-Base, Content-Type')
 

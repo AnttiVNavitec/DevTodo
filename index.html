@@ -1046,6 +1046,25 @@ async function fetchEpicChildren(epicKey) {
     throw new Error(await resp.text());
   }
 }
+  async function jiraAssignToMe(issueKey) {
+    const { url, email, token } = settings.jira;
+    const auth = btoa(`${email}:${token}`);
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Jira-Auth': `Basic ${auth}`,
+      'X-Jira-Base': url.replace(/\/+$/, ''),
+    };
+    const meResp = await fetch('/proxy/jira/rest/api/3/myself', { headers });
+    if (!meResp.ok) throw new Error(`Could not get current user: ${meResp.status}`);
+    const { accountId } = await meResp.json();
+    const resp = await fetch(`/proxy/jira/rest/api/3/issue/${issueKey}/assignee`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ accountId }),
+    });
+    if (!resp.ok) throw new Error(`Could not assign ${issueKey}: ${resp.status}`);
+  }
+
   function issueTypeIcon(name) {
     const n = (name || '').toLowerCase();
     if (n.includes('bug'))     return '🐛';
@@ -1113,7 +1132,7 @@ async function fetchEpicChildren(epicKey) {
     return new Date(a.fields.created) - new Date(b.fields.created);
   }
 
-  function buildJiraItem(issue, isSupport) {
+  function buildJiraItem(issue, isSupport, isUnassigned = false) {
     const { key, fields } = issue;
     const title     = fields.summary || '(no title)';
     const status    = fields.status?.name || '';
@@ -1145,9 +1164,18 @@ async function fetchEpicChildren(epicKey) {
       <div class="item-actions">
         <button class="btn btn-sm btn-track" title="Track time">▶</button>
       </div>`;
-    a.querySelector('.btn-track').addEventListener('click', e => {
+    a.querySelector('.btn-track').addEventListener('click', async e => {
       e.preventDefault(); e.stopPropagation();
-      clockIn(trackLabel, 'jira', false);
+      if (isUnassigned) {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        btn.textContent = '…';
+        try { await jiraAssignToMe(key); } catch (err) { console.error('Assign failed:', err); }
+        clockIn(trackLabel, 'jira', false);
+        setTimeout(() => { loadJira(); loadEpicPanel(); }, 3000);
+      } else {
+        clockIn(trackLabel, 'jira', false);
+      }
     });
     return a;
   }
@@ -1198,7 +1226,7 @@ async function fetchEpicChildren(epicKey) {
         if (showUnassigned && supportIssues.length) {
           const sorted = [...supportIssues].sort(jiraSupportSort);
           body.appendChild(divider(`Unassigned Support (${sorted.length})`));
-          sorted.forEach(i => body.appendChild(buildJiraItem(i, true)));
+          sorted.forEach(i => body.appendChild(buildJiraItem(i, true, true)));
         }
       }
 
@@ -1242,7 +1270,7 @@ async function fetchEpicChildren(epicKey) {
         body.innerHTML = `<div class="empty">No open child items</div>`;
       } else {
         issues.forEach(issue => {
-          const el = buildJiraItem(issue, false);
+          const el = buildJiraItem(issue, false, true);
           body.appendChild(el);
         });
       }
