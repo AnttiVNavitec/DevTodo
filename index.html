@@ -66,8 +66,12 @@
         </div>
         <div style="flex:1"></div>
         <label class="checkbox-label">
+          <input type="checkbox" id="isSupportMode">
+          IS mode
+        </label>
+        <label class="checkbox-label">
           <input type="checkbox" id="showUnassigned">
-          Show unassigned internal support tickets
+          Show unassigned IS tickets
         </label>
         <button class="btn btn-sm btn-icon" id="refreshJira" title="Refresh Jira">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -299,6 +303,7 @@
   const KEY_SETTINGS         = 'devtodo_settings';
   const KEY_TODOS            = 'devtodo_todos';
   const KEY_UNASSIGNED       = 'devtodo_show_unassigned';
+  const KEY_IS_MODE          = 'devtodo_is_mode';
   const KEY_TIME_ENTRIES     = 'devtodo_time_entries';
   const KEY_TIME_ACTIVE      = 'devtodo_time_active';
   const KEY_TIME_SUGGESTIONS = 'devtodo_time_suggestions';
@@ -321,6 +326,7 @@
   let settings        = loadSettings();
   let localTodos      = loadTodos();
   let showUnassigned  = localStorage.getItem(KEY_UNASSIGNED) === 'true';
+  let isSupportMode   = localStorage.getItem(KEY_IS_MODE) === 'true';
   let timeEntries     = loadTimeEntries();
   let activeEntry     = loadActiveEntry();
   let timeSuggestions = loadSuggestions();
@@ -983,7 +989,7 @@
   async function jiraFetch(jql) {
     const { url, email, token } = settings.jira;
     const auth   = btoa(`${email}:${token}`);
-    const query  = `jql=${encodeURIComponent(jql)}&fields=summary,status,issuetype,priority,customfield_10101,customfield_10020,updated,created&maxResults=100`;
+    const query  = `jql=${encodeURIComponent(jql)}&fields=summary,status,issuetype,priority,project,customfield_10101,customfield_10020,updated,created&maxResults=100`;
     const resp   = await fetch(`/proxy/jira/rest/api/3/search/jql?${query}`, {
       headers: {
         'X-Jira-Auth': `Basic ${auth}`,
@@ -1132,6 +1138,53 @@ async function fetchEpicChildren(epicKey) {
     return new Date(a.fields.created) - new Date(b.fields.created);
   }
 
+  // IS mode: merged sort across assigned + unassigned pools
+  // Tier 0 — highest-priority IS & bugs (assigned or unassigned)
+  // Tier 1 — assigned IS & bugs, non-highest, priority desc, bugs beat IS at same priority
+  // Tier 2 — unassigned IS & bugs, non-highest, priority desc then oldest first
+  // Tier 3 — assigned other tickets (original sort)
+  // Tier 4 — everything else
+  function makeIsModeComparator(assignedKeys, supportProject) {
+    const assigned  = i => assignedKeys.has(i.key);
+    const isBug     = i => (i.fields.issuetype?.name || '') === 'Bug';
+    const isIS      = i => !!supportProject && (i.fields.project?.key || '') === supportProject;
+    const isSB      = i => isBug(i) || isIS(i);
+    const isHighest = i => priorityOrder(i.fields.priority?.name) === 0;
+
+    function tier(i) {
+      if (isSB(i) && isHighest(i)) return 0;
+      if (isSB(i) && assigned(i))  return 1;
+      if (isSB(i))                 return 2;
+      if (assigned(i))             return 3;
+      return 4;
+    }
+
+    return function(a, b) {
+      const tA = tier(a), tB = tier(b);
+      if (tA !== tB) return tA - tB;
+
+      const pA = priorityOrder(a.fields.priority?.name);
+      const pB = priorityOrder(b.fields.priority?.name);
+      const bugRank = i => isBug(i) ? 0 : 1;
+
+      if (tA === 0) {
+        if (pA !== pB) return pA - pB;
+        if (bugRank(a) !== bugRank(b)) return bugRank(a) - bugRank(b);
+        return (assigned(a) ? 0 : 1) - (assigned(b) ? 0 : 1);
+      }
+      if (tA === 1) {
+        if (pA !== pB) return pA - pB;
+        return bugRank(a) - bugRank(b);
+      }
+      if (tA === 2) {
+        if (pA !== pB) return pA - pB;
+        return new Date(a.fields.created) - new Date(b.fields.created);
+      }
+      if (tA === 3) return jiraMyIssueSort(a, b);
+      return 0;
+    };
+  }
+
   function buildJiraItem(issue, isSupport, isUnassigned = false) {
     const { key, fields } = issue;
     const title     = fields.summary || '(no title)';
@@ -1208,15 +1261,27 @@ async function fetchEpicChildren(epicKey) {
     $id('refreshJira').disabled = true;
 
     try {
+      const fetchSupport = isSupportMode || showUnassigned;
       const [myIssues, supportIssues] = await Promise.all([
         fetchMyJiraIssues(),
-        showUnassigned ? fetchSupportTickets() : Promise.resolve([]),
+        fetchSupport ? fetchSupportTickets() : Promise.resolve([]),
       ]);
 
       body.innerHTML = '';
 
       if (myIssues.length === 0 && supportIssues.length === 0) {
         body.innerHTML = `<div class="empty"><span class="empty-icon">🎉</span>All caught up — no open issues!</div>`;
+      } else if (isSupportMode) {
+        const assignedKeys = new Set(myIssues.map(i => i.key));
+        const all = [...myIssues, ...supportIssues].sort(
+          makeIsModeComparator(assignedKeys, settings.jira.supportProject)
+        );
+        all.forEach(i => {
+          const isUnassigned = !assignedKeys.has(i.key);
+          const isSupport = !!settings.jira.supportProject &&
+            (i.fields.project?.key || '') === settings.jira.supportProject;
+          body.appendChild(buildJiraItem(i, isSupport, isUnassigned));
+        });
       } else {
         if (myIssues.length) {
           const sorted = [...myIssues].sort(jiraMyIssueSort);
@@ -1230,7 +1295,7 @@ async function fetchEpicChildren(epicKey) {
         }
       }
 
-      countEl.textContent = myIssues.length + (showUnassigned ? supportIssues.length : 0);
+      countEl.textContent = myIssues.length + (fetchSupport ? supportIssues.length : 0);
     } catch (err) {
       let msg = err.message;
       if (/failed to fetch|networkerror|cors/i.test(msg)) {
@@ -1762,6 +1827,15 @@ async function fetchEpicChildren(epicKey) {
   $id('refreshJira').addEventListener('click', loadJira);
   $id('refreshGitlab').addEventListener('click', loadGitLab);
   $id('refreshAll').addEventListener('click', () => { loadJira(); loadGitLab(); });
+
+  // IS mode toggle
+  const isModeCb = $id('isSupportMode');
+  isModeCb.checked = isSupportMode;
+  isModeCb.addEventListener('change', e => {
+    isSupportMode = e.target.checked;
+    localStorage.setItem(KEY_IS_MODE, isSupportMode);
+    loadJira();
+  });
 
   // Unassigned support toggle
   const unassignedCb = $id('showUnassigned');
