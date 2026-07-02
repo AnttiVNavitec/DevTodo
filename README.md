@@ -6,7 +6,12 @@ DevTODO is a vibecoded app made to solve the problem of having to hunt for thing
 
 DevTODO maintains two Jira lists: the assigned tickets list contains tickets assigned to the user. It is ranked to keep the highest priority, in sprint, and recently updated items near the top. Items waiting for other people are ranked near the bottom.
 
-The second list is the support tickets. The app shows all unassigned support tickets ranked first by priority and then in order of creation, oldest first. This maintains a fair response time by default.
+### Internal Support mode
+When working in internal support, the Jira panel shows the queue of internal support tickets. There is a filter that picks only the tickets related to the component you are responsible for. 
+
+The unassigned support tickets are ranked first by priority and then in order of creation, oldest first. This maintains a fair response time by default. Highest priority tickets show up at the top of the list even when they are unassigned. Otherwise your assigned tickets and bugs will be shown before the queue. Assigned tickets that are not bugs or support will be shown after the queue.
+
+The unassigne tickets get a badge to point out what is assigned to you and what is just from the queue.
 
 ### The pinned epic panel
 You can set a pinned epic in the settings. The unassigned tickets in pinned epic will be visible as a todo list in the UI. You can easily create child stories in it by just typing the title and pressing enter. The title of the Pinned Epic panel functions as a link to the epic.
