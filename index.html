@@ -193,12 +193,17 @@
           <div class="form-group">
             <label class="form-label" for="s-jira-support">Support Project Key</label>
             <input class="form-input" id="s-jira-support" placeholder="e.g. SUP or ITSUPPORT">
-            <div class="form-hint">Project key to fetch unassigned "to-do" tickets from (enables the checkbox option)</div>
+            <div class="form-hint">Project key for IS tickets (used in IS mode)</div>
           </div>
           <div class="form-group">
             <label class="form-label" for="s-jira-support-status">Support "To Do" Status Name</label>
             <input class="form-input" id="s-jira-support-status" placeholder="To Do">
             <div class="form-hint">Exact status name used for unstarted tickets in your support project</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="s-jira-support-component">My Component</label>
+            <input class="form-input" id="s-jira-support-component" placeholder="e.g. Backend">
+            <div class="form-hint">Only IS tickets with no component or this component are shown. Leave empty to show all.</div>
           </div>
         </div>
         <div class="form-group">
@@ -312,7 +317,7 @@
 
   // ── Default settings ──────────────────────────────────────
   const DEFAULT = {
-    jira:   { url: '', email: '', token: '', supportProject: '', supportStatus: 'To Do' },
+    jira:   { url: '', email: '', token: '', supportProject: '', supportStatus: 'To Do', supportComponent: '' },
     gitlab: { url: 'https://gitlab.com', username: '', token: '' },
     pomo:   { notification: 'browser' },
   };
@@ -983,7 +988,7 @@
   async function jiraFetch(jql) {
     const { url, email, token } = settings.jira;
     const auth   = btoa(`${email}:${token}`);
-    const query  = `jql=${encodeURIComponent(jql)}&fields=summary,status,issuetype,priority,project,customfield_10101,customfield_10020,updated,created&maxResults=100`;
+    const query  = `jql=${encodeURIComponent(jql)}&fields=summary,status,issuetype,priority,project,components,customfield_10101,customfield_10020,updated,created&maxResults=100`;
     const resp   = await fetch(`/proxy/jira/rest/api/3/search/jql?${query}`, {
       headers: {
         'X-Jira-Auth': `Basic ${auth}`,
@@ -1004,10 +1009,13 @@
   }
 
   async function fetchSupportTickets() {
-    const { supportProject, supportStatus } = settings.jira;
+    const { supportProject, supportStatus, supportComponent } = settings.jira;
     if (!supportProject) return [];
     const status = supportStatus || 'To Do';
-    const jql = `project = "${supportProject}" AND status = "${status}" AND assignee is EMPTY ORDER BY created ASC`;
+    const compFilter = supportComponent
+      ? ` AND (component is EMPTY OR component = "${supportComponent}")`
+      : '';
+    const jql = `project = "${supportProject}" AND status = "${status}" AND assignee is EMPTY${compFilter} ORDER BY created ASC`;
     return jiraFetch(jql);
   }
 
@@ -1265,24 +1273,33 @@ async function fetchEpicChildren(epicKey) {
 
       if (myIssues.length === 0 && supportIssues.length === 0) {
         body.innerHTML = `<div class="empty"><span class="empty-icon">🎉</span>All caught up — no open issues!</div>`;
+        countEl.textContent = '0';
       } else if (isSupportMode) {
+        const { supportProject, supportComponent } = settings.jira;
+        const matchesComponent = i => {
+          if (!supportComponent) return true;
+          const comps = i.fields.components || [];
+          return comps.length === 0 || comps.some(c => c.name === supportComponent);
+        };
         const assignedKeys = new Set(myIssues.map(i => i.key));
-        const all = [...myIssues, ...supportIssues].sort(
-          makeIsModeComparator(assignedKeys, settings.jira.supportProject)
-        );
+        const all = [...myIssues, ...supportIssues]
+          .filter(i => {
+            const isISTicket = !!supportProject && (i.fields.project?.key || '') === supportProject;
+            return !isISTicket || matchesComponent(i);
+          })
+          .sort(makeIsModeComparator(assignedKeys, supportProject));
         all.forEach(i => {
           const isUnassigned = !assignedKeys.has(i.key);
-          const isSupport = !!settings.jira.supportProject &&
-            (i.fields.project?.key || '') === settings.jira.supportProject;
+          const isSupport = !!supportProject && (i.fields.project?.key || '') === supportProject;
           body.appendChild(buildJiraItem(i, isSupport, isUnassigned));
         });
+        countEl.textContent = all.length;
       } else {
         const sorted = [...myIssues].sort(jiraMyIssueSort);
         body.appendChild(divider(`My Issues (${sorted.length})`));
         sorted.forEach(i => body.appendChild(buildJiraItem(i, false)));
+        countEl.textContent = sorted.length;
       }
-
-      countEl.textContent = myIssues.length + (isSupportMode ? supportIssues.length : 0);
     } catch (err) {
       let msg = err.message;
       if (/failed to fetch|networkerror|cors/i.test(msg)) {
@@ -1690,8 +1707,9 @@ async function fetchEpicChildren(epicKey) {
     $id('s-jira-url').value            = settings.jira.url;
     $id('s-jira-email').value          = settings.jira.email;
     $id('s-jira-token').value          = settings.jira.token;
-    $id('s-jira-support').value        = settings.jira.supportProject;
-    $id('s-jira-support-status').value = settings.jira.supportStatus || 'To Do';
+    $id('s-jira-support').value           = settings.jira.supportProject;
+    $id('s-jira-support-status').value    = settings.jira.supportStatus || 'To Do';
+    $id('s-jira-support-component').value = settings.jira.supportComponent || '';
     $id('s-jira-epic').value           = settings.jira.activeEpic || '';
     $id('s-gitlab-url').value          = settings.gitlab.url;
     $id('s-gitlab-username').value     = settings.gitlab.username;
@@ -1711,8 +1729,9 @@ async function fetchEpicChildren(epicKey) {
         url:            $id('s-jira-url').value.trim(),
         email:          $id('s-jira-email').value.trim(),
         token:          $id('s-jira-token').value.trim(),
-        supportProject: $id('s-jira-support').value.trim(),
-        supportStatus:  $id('s-jira-support-status').value.trim() || 'To Do',
+        supportProject:   $id('s-jira-support').value.trim(),
+        supportStatus:    $id('s-jira-support-status').value.trim() || 'To Do',
+        supportComponent: $id('s-jira-support-component').value.trim(),
         activeEpic:     $id('s-jira-epic').value.trim(),
       },
       gitlab: {
