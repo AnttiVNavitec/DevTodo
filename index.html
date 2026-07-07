@@ -740,13 +740,15 @@
     const todayTotal = fmtDuration(doneMs + liveMs);
 
     if (activeEntry) {
-      const elapsed = Date.now() - new Date(activeEntry.startedAt);
+      const elapsed  = Date.now() - new Date(activeEntry.startedAt);
+      const jiraKey  = activeEntry.type === 'jira' ? jiraKeyFromLabel(activeEntry.label) : null;
       bar.innerHTML = `
         <div class="tracker-dot active"></div>
         <span class="tracker-label"><strong>${esc(activeEntry.label)}</strong></span>
         <span class="tracker-elapsed">${fmtDuration(elapsed)}</span>
         <span class="tracker-today">Today: ${esc(todayTotal)}</span>
         <div class="tracker-actions">
+          ${jiraKey ? `<button class="btn btn-sm" id="trackerSaveTicketBtn" title="Download this ticket as a Markdown wiki page">⬇ Save ticket</button>` : ''}
           <button class="btn btn-sm" id="trackerOtherBtn">Other work…</button>
           <button class="btn btn-sm btn-danger" id="trackerStopBtn">■ Stop</button>
         </div>
@@ -756,6 +758,22 @@
         clockOut();
       });
       $id('trackerOtherBtn').addEventListener('click', openOtherWork);
+      if (jiraKey) {
+        $id('trackerSaveTicketBtn').addEventListener('click', async e => {
+          const btn = e.currentTarget;
+          const originalText = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = '…';
+          try {
+            await downloadJiraTicket(jiraKey);
+          } catch (err) {
+            window.alert(err?.message || 'Failed to download Jira ticket.');
+          } finally {
+            btn.disabled = false;
+            btn.textContent = originalText;
+          }
+        });
+      }
     } else {
       bar.innerHTML = `
         <div class="tracker-dot idle"></div>
@@ -985,6 +1003,41 @@
   }
 
   // ── Jira ──────────────────────────────────────────────────
+  function jiraKeyFromLabel(label) {
+    const m = /^([A-Z][A-Z0-9]*-\d+):/.exec(label || '');
+    return m ? m[1] : null;
+  }
+
+  async function downloadJiraTicket(key) {
+    const { url, email, token } = settings.jira;
+    const auth = btoa(`${email}:${token}`);
+    const resp = await fetch(`/jira/ticket.md?key=${encodeURIComponent(key)}`, {
+      headers: {
+        'X-Jira-Auth': `Basic ${auth}`,
+        'X-Jira-Base': url.replace(/\/+$/, ''),
+      },
+    });
+
+    if (!resp.ok) {
+      let message = `Jira export failed (${resp.status})`;
+      try {
+        const payload = await resp.json();
+        if (payload?.error) message = payload.error;
+      } catch {}
+      throw new Error(message);
+    }
+
+    const blob = await resp.blob();
+    const href = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = href;
+    link.download = `${key}.md`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(href);
+  }
+
   async function jiraFetch(jql) {
     const { url, email, token } = settings.jira;
     const auth   = btoa(`${email}:${token}`);

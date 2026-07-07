@@ -8,6 +8,8 @@ requests server-side so the browser never hits CORS restrictions.
 Endpoints proxied:
   GET /proxy/jira/<path>?<query>   — forwards to Jira with X-Jira-Auth / X-Jira-Base headers
   GET /proxy/gitlab/<path>?<query> — forwards to GitLab with X-Gitlab-Token / X-Gitlab-Base headers
+  GET /jira/ticket.md?key=<key>    — downloads a Jira ticket as a Markdown wiki page
+  GET /gitlab/mr-comments.md       — downloads open GitLab MR review comments as Markdown
 """
 import http.server
 import urllib.request
@@ -15,10 +17,12 @@ import urllib.error
 import urllib.parse
 import json
 import os
+import re
 import ssl
 import sys
 
 from fetch_mr_comments import build_markdown, get_file_context, paginate, api_get
+import jira_downloader
 
 PORT = 8080
 BIND = "127.0.0.1"
@@ -61,6 +65,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._serve_file('index.html', 'text/html; charset=utf-8')
         elif path == '/gitlab/mr-comments.md':
             self._download_gitlab_mr_comments(parsed)
+        elif path == '/jira/ticket.md':
+            self._download_jira_ticket(parsed)
         elif path.startswith('/proxy/jira/'):
             self._proxy_jira(parsed)
         elif path.startswith('/proxy/gitlab/'):
@@ -245,6 +251,41 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', f'http://{BIND}:{PORT}')
             self.send_header('Content-Type', 'text/markdown; charset=utf-8')
             self.send_header('Content-Disposition', f'attachment; filename="{filename}.md"')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode(errors='replace')
+            self._json_error(exc.code, body)
+        except Exception as exc:
+            self._json_error(502, str(exc))
+
+    def _download_jira_ticket(self, parsed):
+        if not self._check_origin():
+            return
+
+        auth = self.headers.get('X-Jira-Auth', '').strip()
+        base = self.headers.get('X-Jira-Base', '').strip().rstrip('/')
+
+        if not auth or not base:
+            self._json_error(400, 'Missing X-Jira-Auth or X-Jira-Base header')
+            return
+
+        query = urllib.parse.parse_qs(parsed.query)
+        key = (query.get('key') or [''])[0].strip().upper()
+        if not re.match(r'^[A-Z][A-Z0-9]*-\d+$', key):
+            self._json_error(400, 'Missing or invalid required query parameter: key')
+            return
+
+        try:
+            issue = jira_downloader.api_get_issue(base, auth, key)
+            markdown = jira_downloader.build_markdown(issue, base)
+            data = markdown.encode('utf-8')
+
+            self.send_response(200)
+            self.send_header('Access-Control-Allow-Origin', f'http://{BIND}:{PORT}')
+            self.send_header('Content-Type', 'text/markdown; charset=utf-8')
+            self.send_header('Content-Disposition', f'attachment; filename="{key}.md"')
             self.send_header('Content-Length', str(len(data)))
             self.end_headers()
             self.wfile.write(data)
