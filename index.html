@@ -24,7 +24,7 @@
       <div style="flex:1"></div>
       <span class="pomo-counts" id="pomoCounts"></span>
     </div>
-    <div class="header-week">Week <span id="currentWeek">-</span></div>
+    <div class="header-week">Week <span id="currentWeek">-</span><span class="sprint-info" id="sprintInfo"></span></div>
     <button class="btn btn-icon" id="refreshAll" title="Refresh Jira & GitLab">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" id="refreshIcon">
         <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
@@ -337,6 +337,7 @@
   let pomoCycles     = loadPomoCycles();
   let ctxSwitches    = loadCtxSwitches();
   let pomoNotifiedAt = null;
+  let activeSprint   = null;
 
   // ── Helpers ───────────────────────────────────────────────
   function loadSettings() {
@@ -1234,6 +1235,15 @@ async function fetchEpicChildren(epicKey) {
     return sprints.some(sprint => sprint.state === 'active');
   }
 
+  // Sprint objects come embedded in the issues, so no extra Jira call is needed.
+  // Several boards can have an active sprint at once — pick the most recently started.
+  function findActiveSprint(issues) {
+    return issues
+      .flatMap(i => i.fields.customfield_10101 || i.fields.customfield_10020 || [])
+      .filter(s => s && s.state === 'active' && s.endDate)
+      .sort((a, b) => new Date(b.startDate || 0) - new Date(a.startDate || 0))[0] || null;
+  }
+
   // My Issues: sprint → priority → status tier → LRU
   function jiraMyIssueSort(a, b) {
     const inSprint = i => issueInActiveSprint(i) ? 0 : 1;
@@ -1381,6 +1391,9 @@ async function fetchEpicChildren(epicKey) {
         fetchMyJiraIssues(),
         isSupportMode ? fetchSupportTickets() : Promise.resolve([]),
       ]);
+
+      activeSprint = findActiveSprint([...myIssues, ...supportIssues]);
+      renderSprintInfo();
 
       body.innerHTML = '';
 
@@ -1985,6 +1998,7 @@ async function fetchEpicChildren(epicKey) {
   });
 
   // ── Init ──────────────────────────────────────────────────
+
   pruneOldEntries();
   // Auto-close any stale session from a previous day (handles laptop sleeping across midnight)
   if (activeEntry && activeEntry.startedAt.slice(0, 10) !== todayStr()) {
@@ -1999,7 +2013,7 @@ async function fetchEpicChildren(epicKey) {
     if (document.visibilityState === 'visible') checkAutoClockout();
   });
   updateWeekNumber();
-  setInterval(updateWeekNumber, 60 * 60 * 1000);
+  setInterval(() => { updateWeekNumber(); renderSprintInfo(); }, 60 * 60 * 1000);
   renderTodos();
   loadJira();
   loadGitLab();
