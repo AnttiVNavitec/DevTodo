@@ -390,9 +390,69 @@
     return weekNo;
   }
 
+  let lastActivity = Date.now();
+
+  const markActivity = () => {
+    lastActivity = Date.now();
+  };
+
+
+  function canRefresh() {
+    const idleMs = Date.now() - lastActivity;
+    // Auto-refresh shouldn't happen when the user is using the app
+    // because they might be about to click somenthing just to have things move
+    return (
+      document.visibilityState === "hidden" ||
+      idleMs > 30000 // 30 seconds idle
+    );
+  }
+
+  function setupAutoRefresh()
+  {
+      [
+      "mousemove",
+      "mousedown",
+      "keydown",
+      "scroll",
+      "touchstart"
+    ].forEach(event =>
+      window.addEventListener(event, markActivity, { passive: true })
+    );
+
+    setInterval(async () => {
+      if (canRefresh()) {
+        loadJira();
+        loadGitLab();
+      }
+    }, 60000 * 15);
+  }
+
   // ── Header ───────────────────────────────────────────────
   function updateWeekNumber() {
     $id('currentWeek').textContent = getCalendarWeek();
+  }
+
+  function renderSprintInfo() {
+    const el = $id('sprintInfo');
+    if (!activeSprint) {
+      el.textContent = '';
+      el.className = 'sprint-info';
+      el.removeAttribute('title');
+      return;
+    }
+
+    const midnight = d => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const end  = new Date(activeSprint.endDate);
+    const days = Math.round((midnight(end) - midnight(new Date())) / 86400000);
+
+    let text;
+    if (days < 0)       text = 'sprint overdue';
+    else if (days === 0) text = 'sprint ends today';
+    else                 text = `sprint ends ${end.toLocaleDateString(undefined, { weekday: 'short' })}`;
+
+    el.textContent = ` · ${text}`;
+    el.className = days <= 1 ? 'sprint-info sprint-info-soon' : 'sprint-info';
+    el.title = `${activeSprint.name || 'Sprint'} ends ${end.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}`;
   }
 
   // ── Time tracking storage ──────────────────────────────────
@@ -1944,7 +2004,9 @@ async function fetchEpicChildren(epicKey) {
   loadJira();
   loadGitLab();
   loadEpicPanel();
-})();
+  
+  setupAutoRefresh();
+  })();
 </script>
 </body>
 </html>
