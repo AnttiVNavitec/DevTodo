@@ -1,6 +1,5 @@
 # Meta TODO (todo for the todo list)
 ## Better layout for large screens
-## Move Support tickets higher up or to a separate panel
 ## Automatically refresh panels
 - Not when cursor is on top of them (possibly about to click)
 - When the last modified time of the most recently modified item shows that the content has changed.
@@ -13,7 +12,5 @@
 ## Log with notes that you can add
 - The note items get filed under the selected task
 - The note items also get added to a chronological log
-## Downloading of Jira tickets
-- Button to download a Jira ticket (Description, comments and the list of linked items) as an MD file
 ## Turn URLs in local todos into links
 ## The MR:s could show when they were last modified and how many open threads they have

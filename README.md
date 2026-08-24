@@ -16,6 +16,9 @@ The unassigne tickets get a badge to point out what is assigned to you and what 
 ### The pinned epic panel
 You can set a pinned epic in the settings. The unassigned tickets in pinned epic will be visible as a todo list in the UI. You can easily create child stories in it by just typing the title and pressing enter. The title of the Pinned Epic panel functions as a link to the epic.
 
+### Download Jira as MD
+There is also a funcionality to download the current Jira ticket as a markdown file
+
 ## Merge requests
 
 The app ranks the recently worked on and actionable merge requests on top of the list. The most critical are the tickets the user is reviewing and the tickets that are ready to merge. Tickets you have already approved go to the bottom of the list to not be on the way. The rest are ranked by last updated time, keeping the most active work items at the top. 
