@@ -62,7 +62,8 @@ def _run(cwd, *args):
 
     if proc.returncode != 0:
         raise GitFailed(pretty, (proc.stderr or proc.stdout or '').strip())
-    return pretty, (proc.stdout or '').strip()
+    # fetch and switch report what they did on stderr, so fall back to it for the log
+    return pretty, ((proc.stdout or '').strip() or (proc.stderr or '').strip())
 
 
 def _read(cwd, *args):
@@ -181,10 +182,7 @@ def branches(roots, path):
 
 def default_base(path):
     """The repo's own default branch, from origin/HEAD. None if it isn't set."""
-    ref = _read(path, 'symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD')
-    if ref.startswith('refs/remotes/'):
-        return ref[len('refs/remotes/'):]
-    return None
+    return worktrees.default_base(path)
 
 
 def _validate_branch_name(name):
@@ -367,6 +365,42 @@ def op_fetch(roots, params):
     return [_run(wt['path'], 'fetch', '--prune')]
 
 
+def op_sync_base(roots, params):
+    """
+    Bring the repo's default branch up to date **without checking it out**.
+
+    This is the awkward one to do by hand. `git fetch origin X:X` updates a local branch
+    in place, but git refuses it when X is checked out anywhere — so when some worktree
+    does hold it, fast-forward that worktree instead. Neither path is allowed to move a
+    branch that has diverged: no `+refspec`, no `--force`, `--ff-only` on the merge. If
+    the local branch has commits the remote does not, that is a real situation and it
+    should be reported rather than silently flattened.
+    """
+    by_path, repo_of, _ = index(roots)
+    anchor = _resolve(by_path, params.get('path'))
+    repo = repo_of[worktrees.path_key(anchor['path'])]
+
+    base = (params.get('base') or '').strip() or repo.get('base') or default_base(repo['main'])
+    if not base:
+        raise Refused('No default branch: origin/HEAD is not set for this repository')
+    if '/' not in base:
+        raise Refused(f'Expected a remote-tracking ref like "origin/main", got "{base}"')
+
+    remote, branch = base.split('/', 1)
+    steps = [_run(repo['main'], 'fetch', '--prune', remote)]
+
+    holder = _holder_of(by_path, repo_of, branch, anchor)
+    if holder is not None:
+        # Checked out somewhere, so update it there. Requires a clean, idle worktree.
+        guard(holder, f'fast-forward {branch} in')
+        steps.append(_run(holder['path'], 'merge', '--ff-only', base))
+    else:
+        # Nothing holds it: write the local branch straight from the remote
+        steps.append(_run(repo['main'], 'fetch', remote, f'{branch}:{branch}'))
+
+    return steps
+
+
 OPERATIONS = {
     'checkout':     ('Check out branch',  op_checkout),
     'create':       ('Create branch',     op_create),
@@ -375,6 +409,7 @@ OPERATIONS = {
     'worktree-add': ('Add worktree',      op_worktree_add),
     'prune':        ('Prune worktrees',   op_prune),
     'fetch':        ('Fetch',             op_fetch),
+    'sync-base':    ('Update base branch', op_sync_base),
 }
 
 

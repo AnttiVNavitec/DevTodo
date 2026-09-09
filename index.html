@@ -2056,6 +2056,29 @@ async function fetchEpicChildren(epicKey) {
     el.innerHTML = `<span class="divider-label">${esc(repo.name)} (${count})</span>
                     <div class="divider-line"></div>`;
 
+    // Bring the default branch up to date without checking it out — what you want
+    // before merging it into whatever you are actually working on.
+    if (repo.base) {
+      const baseName = repo.base.replace(/^[^/]+\//, '');
+      const holder = repo.worktrees.find(w => w.branch === baseName);
+      const reason = holder ? worktreeBlockReason(holder) : null;
+
+      const sync = document.createElement('button');
+      sync.className = 'btn btn-sm btn-action';
+      sync.textContent = `⇩ ${baseName}`;
+      if (reason) {
+        sync.disabled = true;
+        sync.title = reason;
+      } else {
+        sync.title = holder
+          ? `Fast-forward ${baseName} in ${holder.name} (it is checked out there)`
+          : `Update ${baseName} from ${repo.base} without checking it out`;
+        sync.addEventListener('click', () => performOp(
+          sync, 'sync-base', { path: repo.worktrees[0].path }));
+      }
+      el.appendChild(sync);
+    }
+
     const add = document.createElement('button');
     add.className = 'btn btn-sm btn-action';
     add.textContent = '+⌸';

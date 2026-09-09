@@ -166,7 +166,7 @@ matches it on purpose so gaps and entries line up.
 
 ## Branch operations
 `gitops.py` holds a fixed operation table (`checkout`, `create`, `move`, `detach`,
-`worktree-add`, `prune`, `fetch`). Same shape as `spawn.py`: the client names an operation,
+`worktree-add`, `prune`, `fetch`, `sync-base`). Same shape as `spawn.py`: the client names an operation,
 never a command line. **Guards are enforced server-side** — the UI's disabled buttons are
 only an affordance. `worktreeBlockReason()` mirrors them client-side so a button never
 lies about being available.
@@ -184,6 +184,12 @@ Things that must not regress:
   `origin/Develop` and another `origin/develop`.
 - `check-ref-format --branch` validates names; `worktree-add` takes a plain folder name
   joined to the main checkout's parent, so a path cannot escape.
+- **`sync-base` never force-updates.** It brings the default branch up to date *without
+  checking it out* — `git fetch origin X:X` when nothing holds it, `merge --ff-only` in the
+  holder when something does, because git refuses a refspec fetch into a checked-out
+  branch. No `+refspec`, no `--force`: a diverged local branch is a real situation and
+  both paths report it rather than flattening it. `repo.base` is in the `/worktrees`
+  payload so the button can be labelled without an extra round trip.
 
 ### The branch picker
 Deliberately does **not** offer every branch — hundreds exist and the command line is the

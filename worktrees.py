@@ -54,6 +54,15 @@ def _iso(epoch):
             .isoformat(timespec='seconds').replace('+00:00', 'Z'))
 
 
+def default_base(path):
+    """The repo's own default branch, e.g. 'origin/Develop'. None if origin/HEAD is unset."""
+    ok, out, _ = _git(path, 'symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD')
+    ref = (out or '').strip()
+    if ok and ref.startswith('refs/remotes/'):
+        return ref[len('refs/remotes/'):]
+    return None
+
+
 def path_key(path):
     """Comparable form of a path — case-insensitive, one separator, no trailing slash."""
     return os.path.normpath(str(path)).replace('\\', '/').rstrip('/').casefold()
@@ -200,6 +209,7 @@ def _collect_repo(root):
     return {
         'name': os.path.basename(os.path.normpath(main_path)),
         'main': main_path,
+        'base': default_base(main_path),
         'records': records,
     }, None
 

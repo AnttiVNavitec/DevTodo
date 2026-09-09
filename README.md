@@ -62,6 +62,8 @@ Each worktree row has a **Branch…** picker. It does not list every branch — 
 
 Because git refuses to check the same branch out twice, a branch held by another worktree offers **Move here** instead, which detaches the holder and checks it out where you asked. Getting a branch into the main checkout, which some tooling insists on, is a single click from the tracker bar. There is also **Release** to detach a worktree and free its branch, and per-repository buttons to add a worktree beside the main checkout or prune ones whose folders are gone.
 
+Each repository heading also has a button to bring its default branch up to date — **without checking it out**, which is the point. When you need to merge Develop into whatever you're working on, you want Develop current but you don't want to leave your branch. Doing that by hand is fiddly, because git refuses to fetch into a branch that's checked out somewhere; the button takes whichever path applies. If your local copy of that branch has commits the remote doesn't, it stops and tells you rather than throwing them away.
+
 Every one of these refuses to touch a worktree with uncommitted changes, or one where Claude was active in the last couple of minutes — pulling a branch out from under a running agent produces confident nonsense. Dialogs show the exact git commands before running them, and when git objects you get its own words, not a paraphrase. Merging, rebasing and pushing are deliberately absent: those belong in a terminal.
 
 ## Forgetting to clock in
