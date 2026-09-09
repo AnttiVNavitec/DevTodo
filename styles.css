@@ -367,6 +367,15 @@
     .worktree-item { cursor: default; }
     .worktree-item:hover { background: var(--surface-hover); }
 
+    /* The worktree holding the running timer */
+    .worktree-tracking {
+      background: rgba(16,185,129,0.06);
+      box-shadow: inset 2px 0 0 var(--local-green);
+    }
+    .worktree-tracking:hover { background: rgba(16,185,129,0.11); }
+    /* Keep the play button visible on the tracked row, not just on hover */
+    .worktree-tracking .item-actions { opacity: 1; }
+
     .worktree-commit {
       font-size: 11px;
       color: var(--text-subtle);

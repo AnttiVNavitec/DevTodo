@@ -383,6 +383,8 @@
   let ctxSwitches    = loadCtxSwitches();
   let pomoNotifiedAt = null;
   let activeSprint   = null;
+  let jiraSummaries  = new Map();   // issue key → summary, warmed by whatever Jira returns
+  let worktreeData   = null;        // last /worktrees response, so renders need no refetch
 
   // ── Helpers ───────────────────────────────────────────────
   function loadSettings() {
@@ -806,6 +808,7 @@
     activeEntry = { id: Date.now(), label, type, startedAt: switchTime, endedAt: null };
     saveActiveEntry();
     renderTracker();
+    renderWorktrees();
   }
 
   function clockOut(endedAt) {
@@ -816,6 +819,7 @@
     activeEntry = null;
     saveActiveEntry();
     renderTracker();
+    renderWorktrees();
   }
 
   function checkAutoClockout() {
@@ -851,7 +855,8 @@
 
     if (activeEntry) {
       const elapsed  = Date.now() - new Date(activeEntry.startedAt);
-      const jiraKey  = activeEntry.type === 'jira' ? jiraKeyFromLabel(activeEntry.label) : null;
+      // Keyed off the label, not the entry type — worktree entries carry a real ticket key too
+      const jiraKey  = jiraKeyFromLabel(activeEntry.label);
       bar.innerHTML = `
         <div class="tracker-dot active"></div>
         <span class="tracker-label"><strong>${esc(activeEntry.label)}</strong></span>
@@ -1148,6 +1153,28 @@
     URL.revokeObjectURL(href);
   }
 
+  function cacheJiraSummaries(issues) {
+    (issues || []).forEach(i => {
+      if (i && i.key && i.fields && i.fields.summary) jiraSummaries.set(i.key, i.fields.summary);
+    });
+  }
+
+  /** Summary for a key the panels never loaded — e.g. a branch for someone else's ticket. */
+  async function fetchJiraSummary(key) {
+    const { url, email, token } = settings.jira;
+    if (!url || !email || !token) return null;
+    const auth = btoa(`${email}:${token}`);
+    const resp = await fetch(`/proxy/jira/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary`, {
+      headers: {
+        'X-Jira-Auth': `Basic ${auth}`,
+        'X-Jira-Base': url.replace(/\/+$/, ''),
+      },
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json().catch(() => null);
+    return data?.fields?.summary || null;
+  }
+
   async function jiraFetch(jql) {
     const { url, email, token } = settings.jira;
     const auth   = btoa(`${email}:${token}`);
@@ -1441,6 +1468,7 @@ async function fetchEpicChildren(epicKey) {
         isSupportMode ? fetchSupportTickets() : Promise.resolve([]),
       ]);
 
+      cacheJiraSummaries([...myIssues, ...supportIssues]);
       activeSprint = findActiveSprint([...myIssues, ...supportIssues]);
       renderSprintInfo();
 
@@ -1507,6 +1535,7 @@ async function fetchEpicChildren(epicKey) {
 
     try {
       const issues = await fetchEpicChildren(activeEpic);
+      cacheJiraSummaries(issues);
 
       body.innerHTML = '';
 
@@ -1874,14 +1903,51 @@ async function fetchEpicChildren(epicKey) {
     return days === 1 ? 'yesterday' : `${days}d ago`;
   }
 
+  /** Label without touching the network. Matches the Jira panel's `KEY: summary` shape so
+   *  time tracked from either place lands on the same summary row. */
+  function worktreeLabelSync(wt) {
+    const key = ticketKeyOf(wt.branch);
+    if (key) {
+      const summary = jiraSummaries.get(key);
+      if (summary) return `${key}: ${summary}`.slice(0, 80);
+      // No summary to hand: use the rest of the branch name, minus the key it repeats
+      const rest = (wt.branch || '').replace(/^.*?[A-Z][A-Z0-9]+-\d+[-_/]?/, '').trim();
+      return `${key}: ${rest || wt.name}`.slice(0, 80);
+    }
+    return `${wt.name}: ${wt.branch || 'no branch'}`.slice(0, 80);
+  }
+
+  async function worktreeLabel(wt) {
+    const key = ticketKeyOf(wt.branch);
+    if (key && !jiraSummaries.has(key)) {
+      // Branches often point at tickets no panel loaded — someone else's, or already closed
+      try {
+        const summary = await fetchJiraSummary(key);
+        if (summary) jiraSummaries.set(key, summary);
+      } catch { /* fall back to the branch name below */ }
+    }
+    return worktreeLabelSync(wt);
+  }
+
+  /** True when the running timer belongs to this worktree. Matching on the ticket key means
+   *  clocking in from the Jira panel also lights up the worktree the branch lives in. */
+  function isWorktreeActive(wt) {
+    if (!activeEntry) return false;
+    const key = ticketKeyOf(wt.branch);
+    if (key) return jiraKeyFromLabel(activeEntry.label) === key;
+    return activeEntry.label === worktreeLabelSync(wt);
+  }
+
   function buildWorktreeItem(wt) {
     const el = document.createElement('div');
-    el.className = 'item worktree-item';
+    const tracking = isWorktreeActive(wt);
+    el.className = `item worktree-item${tracking ? ' worktree-tracking' : ''}`;
 
     const ticket = ticketKeyOf(wt.branch);
     const dirty  = wt.dirty || {};
     const badges = [];
 
+    if (tracking)  badges.push('<span class="badge badge-green">▶ Tracking</span>');
     if (wt.isMain) badges.push('<span class="badge badge-gray" title="Main checkout — some work has to happen here">Main</span>');
     if (ticket)    badges.push(`<span class="badge badge-blue">${esc(ticket)}</span>`);
 
@@ -1926,11 +1992,30 @@ async function fetchEpicChildren(epicKey) {
         </div>
         ${commit}
         ${error}
+      </div>
+      <div class="item-actions">
+        <button class="btn btn-sm btn-track" title="Track time on ${esc(worktreeLabelSync(wt))}">▶</button>
       </div>`;
+
+    el.querySelector('.btn-track').addEventListener('click', async e => {
+      e.preventDefault();
+      e.stopPropagation();
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.textContent = '…';
+      try {
+        clockIn(await worktreeLabel(wt), 'worktree', false);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '▶';
+      }
+    });
     return el;
   }
 
-  async function loadWorktrees() {
+  /** Renders from the last fetch, so clocking in or out can repaint the panel without
+   *  shelling out to git again. */
+  function renderWorktrees() {
     const body    = $id('worktreeBody');
     const countEl = $id('worktreeCount');
     const roots   = (settings.worktrees || {}).roots || [];
@@ -1947,6 +2032,51 @@ async function fetchEpicChildren(epicKey) {
       return;
     }
 
+    if (!worktreeData) {
+      body.innerHTML = `<div class="loading"><div class="spinner"></div><br>Reading worktrees…</div>`;
+      countEl.textContent = '–';
+      return;
+    }
+
+    body.innerHTML = '';
+    let total = 0;
+
+    // Deterministic order — the panel re-renders every few seconds and nothing
+    // should move under the cursor just because a file changed.
+    worktreeData.repos.forEach(repo => {
+      const sorted = [...repo.worktrees].sort((a, b) => {
+        if (a.isMain !== b.isMain) return a.isMain ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+      body.appendChild(divider(`${repo.name} (${sorted.length})`));
+      sorted.forEach(wt => { body.appendChild(buildWorktreeItem(wt)); total += 1; });
+    });
+
+    (worktreeData.errors || []).forEach(e => {
+      const el = document.createElement('div');
+      el.className = 'item worktree-item';
+      el.innerHTML = `
+        <div class="item-icon">⚠️</div>
+        <div class="item-content">
+          <div class="item-title" title="${esc(e.root)}">${esc(e.root)}</div>
+          <div class="worktree-error">${esc(e.error)}</div>
+        </div>`;
+      body.appendChild(el);
+    });
+
+    if (total === 0 && (worktreeData.errors || []).length === 0) {
+      body.innerHTML = `<div class="empty"><span class="empty-icon">⎇</span>No worktrees found.</div>`;
+    }
+    countEl.textContent = total;
+  }
+
+  async function loadWorktrees() {
+    const roots = (settings.worktrees || {}).roots || [];
+    if (location.protocol === 'file:' || roots.length === 0) {
+      renderWorktrees();
+      return;
+    }
+
     const params = new URLSearchParams();
     roots.forEach(r => params.append('root', r));
 
@@ -1956,41 +2086,11 @@ async function fetchEpicChildren(epicKey) {
         const payload = await resp.json().catch(() => ({}));
         throw new Error(payload.error || `Worktree scan failed (${resp.status})`);
       }
-      const data = await resp.json();
-
-      body.innerHTML = '';
-      let total = 0;
-
-      // Deterministic order — the panel re-renders every few seconds and nothing
-      // should move under the cursor just because a file changed.
-      data.repos.forEach(repo => {
-        const sorted = [...repo.worktrees].sort((a, b) => {
-          if (a.isMain !== b.isMain) return a.isMain ? -1 : 1;
-          return a.name.localeCompare(b.name);
-        });
-        body.appendChild(divider(`${repo.name} (${sorted.length})`));
-        sorted.forEach(wt => { body.appendChild(buildWorktreeItem(wt)); total += 1; });
-      });
-
-      (data.errors || []).forEach(e => {
-        const el = document.createElement('div');
-        el.className = 'item worktree-item';
-        el.innerHTML = `
-          <div class="item-icon">⚠️</div>
-          <div class="item-content">
-            <div class="item-title" title="${esc(e.root)}">${esc(e.root)}</div>
-            <div class="worktree-error">${esc(e.error)}</div>
-          </div>`;
-        body.appendChild(el);
-      });
-
-      if (total === 0 && (data.errors || []).length === 0) {
-        body.innerHTML = `<div class="empty"><span class="empty-icon">⎇</span>No worktrees found.</div>`;
-      }
-      countEl.textContent = total;
+      worktreeData = await resp.json();
+      renderWorktrees();
     } catch (err) {
-      body.innerHTML = `<div class="error-state">⚠️ ${esc(err.message)}</div>`;
-      countEl.textContent = '!';
+      $id('worktreeBody').innerHTML = `<div class="error-state">⚠️ ${esc(err.message)}</div>`;
+      $id('worktreeCount').textContent = '!';
     }
   }
 

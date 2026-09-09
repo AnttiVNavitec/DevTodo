@@ -68,12 +68,12 @@ Beyond the original sketch, it also records `error` and `gone` events, so a read
 never mistake "we could not observe this repo" for "nothing happened here" — that
 distinction matters for phase 5 and cannot be reconstructed later.
 
-### Phase 3 — play button per worktree
+### Phase 3 — play button per worktree — **done**
 
-- Each card gets a play button that calls existing `clockIn`.
-- Label resolution: branch → ticket key → look up summary in the Jira cache →
-  `"ABC-1234 Issue summary from Jira"`. Fall back to the branch name.
-- Reuses the existing context-switch counting for free.
+Implemented. Labels deliberately match the Jira panel's `"KEY: summary"` shape so the two
+aggregate into one summary row, and the tracked worktree is marked in the panel — matching
+on ticket key, so clocking in from the Jira panel lights up the worktree its branch lives
+in. Context-switch counting came for free.
 
 ### Phase 4 — spawn tools in a worktree
 

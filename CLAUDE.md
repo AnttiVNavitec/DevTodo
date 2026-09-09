@@ -32,12 +32,12 @@ Grep for `// ── <name>` to jump directly. Sections in order:
 | `Tracker bar` | `clockIn`, `clockOut`, `checkAutoClockout`, `renderTracker` |
 | `Other work modal` | `openOtherWork`, `submitOtherWork` |
 | `Time report modal` | `openTimeReport`, `renderTimeReport`, `renderLogView`, `renderSummaryView` |
-| `Jira` | `jiraFetch`, `fetchMyJiraIssues`, `fetchSupportTickets`, `fetchEpicChildren`, `createEpicIssue`, `buildJiraItem`, `loadJira`, `loadEpicPanel` |
+| `Jira` | `cacheJiraSummaries`, `fetchJiraSummary`, `jiraFetch`, `fetchMyJiraIssues`, `fetchSupportTickets`, `fetchEpicChildren`, `createEpicIssue`, `buildJiraItem`, `loadJira`, `loadEpicPanel` |
 | `Jira sorting` | `priorityOrder`, `jiraStatusTier`, `issueInActiveSprint`, sort comparators |
 | `GitLab` | `fetchGitLabMRs`, `buildGitLabItem`, `downloadMrComments`, `loadGitLab` |
 | `MR ranking` | `mrRank` |
 | `Local Todos` | `renderTodos`, `addTodo` |
-| `Worktrees` | `ticketKeyOf`, `fmtAgo`, `buildWorktreeItem`, `loadWorktrees`, `scanForRepos`, `parseRoots` |
+| `Worktrees` | `ticketKeyOf`, `fmtAgo`, `worktreeLabel`/`worktreeLabelSync`, `isWorktreeActive`, `buildWorktreeItem`, `renderWorktrees`, `loadWorktrees`, `scanForRepos`, `parseRoots` |
 | `Settings Modal` | `openSettings`, `closeSettings`, `collectSettings` |
 | `Event wiring` | All `addEventListener` calls |
 | `Init` | Startup sequence |
@@ -57,6 +57,8 @@ ctxSwitches       [{ date:'YYYY-MM-DD' }] — one record per context switch
 reportDate        YYYY-MM-DD string driving the time report modal
 reportTab         'log' | 'summary'
 summarySelection  Set<label> of checked rows in summary view
+jiraSummaries     Map<issueKey, summary> — warmed by loadJira/loadEpicPanel
+worktreeData      last /worktrees response; renderWorktrees() reads it without refetching
 ```
 
 ## Storage keys (all `devtodo_*`)
@@ -90,6 +92,16 @@ cannot be backfilled, which is why it collects before anything reads it.
 - `fmtDuration(ms)` → `"1h 05m"` / `"45m"` — use for all time display
 - `todayStr()` → `"YYYY-MM-DD"` — use for date comparisons
 - Context switch = `clockIn` called with a different label than `activeEntry.label`
+- **Track labels are `"KEY: summary"`.** The Jira panel, the epic panel and the worktree
+  panel all build labels this way on purpose, so time clocked on the same ticket from any
+  of them aggregates into one row in the summary view. `jiraKeyFromLabel()` parses the key
+  back out, which is what gates the tracker bar's "Save ticket" button — so that button
+  works for worktree entries too. Do not invent a different label shape.
+- The worktree panel's ▶ resolves its label through `jiraSummaries`, fetching a single
+  issue summary on demand for branches whose ticket no panel loaded (someone else's
+  ticket, or a closed one). No summary available falls back to the branch remainder.
+- `clockIn`/`clockOut` call `renderWorktrees()` so the ▶/Tracking marker updates at once
+  instead of waiting for the 10s poll.
 - Entries older than 14 days are pruned on startup (`pruneOldEntries`)
 - The 1-second interval calls both `renderTracker()` and `renderPomo()`
 - `worktrees._cache` is a single immutable `(key, ts, data)` tuple swapped in one

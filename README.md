@@ -44,6 +44,10 @@ Each worktree shows its branch, the ticket key parsed out of the branch name, wh
 
 The panel refreshes itself every 10 seconds while the tab is visible. The order is fixed — repository, then the main checkout, then the other worktrees by name — so a refresh never shuffles a row out from under your cursor.
 
+Each worktree has a ▶ button that starts the timer on whatever it has checked out. If the branch name carries a ticket key, the tracker looks up that ticket's summary and uses the same label the Jira panel would — so an hour clocked from the worktree panel and an hour clocked from the Jira list add up to a single line in the daily summary rather than two. Branches pointing at tickets you never loaded (someone else's, or an already closed one) are fetched on demand; branches with no ticket key are logged under the worktree and branch name.
+
+The worktree currently holding the running timer is marked, and it is matched by ticket key — so clocking in from the Jira list also lights up the worktree that ticket's branch is checked out in, which is a quick way to find where you left the work.
+
 ## Pomodoro timer
 The tool now has integrated pomodoro timer. The timer will keep stats on how many succesful and interrupted pomodoro periods you have logged. The tool also keeps a counter of context switches you have had today (switching between two different tasks).
 
