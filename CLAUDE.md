@@ -4,6 +4,7 @@
 `serve.bat` → `http://localhost:8080` (Python server in `server.py`)
 Jira/GitLab calls are proxied through the server: `/proxy/jira/*`, `/proxy/gitlab/*`
 Git worktree state comes from the server too: `/worktrees`, `/worktrees/scan`, `/activity`
+Tool launching: `POST /worktree/open` `{tool, path}`
 
 ## File layout
 - `index.html` — all HTML + all JS in one IIFE (no build step, no modules)
@@ -13,6 +14,7 @@ Git worktree state comes from the server too: `/worktrees`, `/worktrees/scan`, `
 - `jira_downloader.py` — helper called by server.py
 - `worktrees.py` — git worktree discovery (shells out to git, no repo-specific knowledge)
 - `activity.py` — background poller that logs worktree activity signals to `data/`
+- `spawn.py` — launches external tools (Explorer, Git Bash, VS Code, Claude…) in a worktree
 - `PLAN-worktrees.md` — phased plan for the worktree / auto-time-tracking work
 - `data/` — gitignored. Activity log + remembered repo paths. **Real work data: never commit.**
 
@@ -38,6 +40,7 @@ Grep for `// ── <name>` to jump directly. Sections in order:
 | `MR ranking` | `mrRank` |
 | `Local Todos` | `renderTodos`, `addTodo` |
 | `Worktrees` | `ticketKeyOf`, `fmtAgo`, `worktreeLabel`/`worktreeLabelSync`, `isWorktreeActive`, `buildWorktreeItem`, `renderWorktrees`, `loadWorktrees`, `scanForRepos`, `parseRoots` |
+| `Contextual actions` | `ACTIONS` registry, `openWorktreeTool`, `trackedContext`, `worktreeContext`, `findTrackedWorktree`, `renderContextActions` |
 | `Settings Modal` | `openSettings`, `closeSettings`, `collectSettings` |
 | `Event wiring` | All `addEventListener` calls |
 | `Init` | Startup sequence |
@@ -84,6 +87,36 @@ cannot be backfilled, which is why it collects before anything reads it.
 - The repo list lives in browser localStorage, so the server remembers whatever roots it was
   last asked about in `data/roots.json` and polls those. An empty list never overwrites it.
 - Retention is 14 days, pruned once a day, matching the dashboard's time entries.
+
+## Contextual actions
+One registry (`ACTIONS`) drives every action button, rendered onto two surfaces:
+the **tracker bar** (acting on whatever is being tracked) and each **worktree row**
+(acting on that worktree). Add an action once and pick its surfaces; don't hand-write
+buttons into either place.
+
+```
+{ id, icon, label, title, surfaces: ['tracker'|'worktree'], applies(ctx), run(ctx) }
+```
+
+- `applies(ctx)` → `true` show enabled · `'reason'` show disabled with the reason as
+  tooltip · falsy omit entirely. The three-way return is what lets an action explain why
+  it is unavailable instead of silently vanishing.
+- Context is `{ label, type, jiraKey, worktree }`; any field may be null, and each action
+  declares what it needs. `trackedContext()` resolves the worktree via
+  `isWorktreeActive`, so it is found by ticket key, not by path.
+- `run(ctx)` may do anything — **these are not all program launchers.** Current actions
+  download a file, open a URL, and start processes. Branch checkout / branch creation are
+  the next ones and will open a dialog from `run`.
+- The tracker bar renders `icon + label`; worktree rows render `icon` only, since row
+  actions are hover-revealed and space is tight.
+- `renderTracker()` runs every second and rebuilds these buttons each time, so actions
+  must stay cheap and stateless.
+
+Server side, `spawn.py` holds a **fixed table** of launchable tools. The client sends a
+tool id and a path, never a command line, and `server.py` checks the path is one git
+itself reports as a worktree (membership, not prefix — a prefix test would let any
+subdirectory through). `POST /worktree/open` additionally requires a present, matching
+`Origin` header, which is stricter than the read-only routes: it starts processes.
 
 ## Conventions
 - XSS: always wrap user/external strings with `esc()` before innerHTML

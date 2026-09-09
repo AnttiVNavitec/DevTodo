@@ -855,40 +855,26 @@
 
     if (activeEntry) {
       const elapsed  = Date.now() - new Date(activeEntry.startedAt);
-      // Keyed off the label, not the entry type — worktree entries carry a real ticket key too
-      const jiraKey  = jiraKeyFromLabel(activeEntry.label);
       bar.innerHTML = `
         <div class="tracker-dot active"></div>
         <span class="tracker-label"><strong>${esc(activeEntry.label)}</strong></span>
         <span class="tracker-elapsed">${fmtDuration(elapsed)}</span>
         <span class="tracker-today">Today: ${esc(todayTotal)}</span>
-        <div class="tracker-actions">
-          ${jiraKey ? `<button class="btn btn-sm" id="trackerSaveTicketBtn" title="Download this ticket as a Markdown wiki page">⬇ Save ticket</button>` : ''}
+        <div class="tracker-actions" id="trackerActions">
           <button class="btn btn-sm" id="trackerOtherBtn">Other work…</button>
           <button class="btn btn-sm btn-danger" id="trackerStopBtn">■ Stop</button>
         </div>
         ${notify ? `<span class="tracker-notify">${esc(notify)}</span>` : ''}`;
+      // Whatever applies to the tracked item goes ahead of the fixed timer controls
+      $id('trackerActions').insertBefore(
+        renderContextActions(trackedContext(), 'tracker'),
+        $id('trackerOtherBtn'),
+      );
       $id('trackerStopBtn').addEventListener('click', () => {
         delete bar.dataset.notify;
         clockOut();
       });
       $id('trackerOtherBtn').addEventListener('click', openOtherWork);
-      if (jiraKey) {
-        $id('trackerSaveTicketBtn').addEventListener('click', async e => {
-          const btn = e.currentTarget;
-          const originalText = btn.textContent;
-          btn.disabled = true;
-          btn.textContent = '…';
-          try {
-            await downloadJiraTicket(jiraKey);
-          } catch (err) {
-            window.alert(err?.message || 'Failed to download Jira ticket.');
-          } finally {
-            btn.disabled = false;
-            btn.textContent = originalText;
-          }
-        });
-      }
     } else {
       bar.innerHTML = `
         <div class="tracker-dot idle"></div>
@@ -2010,6 +1996,10 @@ async function fetchEpicChildren(epicKey) {
         btn.textContent = '▶';
       }
     });
+
+    el.querySelector('.item-actions').appendChild(
+      renderContextActions(worktreeContext(wt), 'worktree'),
+    );
     return el;
   }
 
@@ -2122,6 +2112,144 @@ async function fetchEpicChildren(epicKey) {
 
   function parseRoots(text) {
     return text.split('\n').map(l => l.trim().replace(/\\/g, '/')).filter(Boolean);
+  }
+
+  // ── Contextual actions ────────────────────────────────────
+  // One registry drives two surfaces: the tracker bar, acting on whatever is being
+  // tracked, and each worktree row, acting on that worktree. Actions are deliberately not
+  // just program launchers — `run` can download a file, open a URL, or (next) open a
+  // dialog to check a branch out in an idle worktree or create one that doesn't exist yet.
+  //
+  // applies(ctx) → true      show it, enabled
+  //              → 'reason'  show it disabled, with the reason as its tooltip
+  //              → falsy     leave it out entirely
+  //
+  // A context is { label, type, jiraKey, worktree } — any field may be null, and every
+  // action is responsible for saying which ones it needs.
+  const ACTIONS = [
+    {
+      id: 'saveTicket', icon: '⬇', label: 'Save ticket',
+      title: 'Download this ticket as a Markdown wiki page',
+      surfaces: ['tracker'],
+      applies: ctx => !!ctx.jiraKey,
+      run: ctx => downloadJiraTicket(ctx.jiraKey),
+    },
+    {
+      id: 'openJira', icon: '↗', label: 'Jira',
+      title: 'Open this ticket in Jira',
+      surfaces: ['tracker'],
+      applies: ctx => !!ctx.jiraKey && (settings.jira.url ? true : 'Set your Jira URL in Settings'),
+      run: ctx => {
+        const base = settings.jira.url.replace(/\/+$/, '');
+        window.open(`${base}/browse/${encodeURIComponent(ctx.jiraKey)}`, '_blank', 'noopener');
+      },
+    },
+    {
+      id: 'explorer', icon: '📁', label: 'Explorer',
+      title: 'Open this worktree in File Explorer',
+      surfaces: ['tracker', 'worktree'],
+      applies: ctx => !!ctx.worktree,
+      run: ctx => openWorktreeTool('explorer', ctx.worktree.path),
+    },
+    {
+      id: 'gitbash', icon: '>_', label: 'Bash',
+      title: 'Open Git Bash in this worktree',
+      surfaces: ['tracker', 'worktree'],
+      applies: ctx => !!ctx.worktree,
+      run: ctx => openWorktreeTool('gitbash', ctx.worktree.path),
+    },
+    {
+      id: 'vscode', icon: '</>', label: 'VS Code',
+      title: 'Open this worktree in VS Code',
+      surfaces: ['tracker', 'worktree'],
+      applies: ctx => !!ctx.worktree,
+      run: ctx => openWorktreeTool('vscode', ctx.worktree.path),
+    },
+    {
+      id: 'claude', icon: '✳', label: 'Claude',
+      title: 'Start Claude Code in this worktree',
+      surfaces: ['tracker', 'worktree'],
+      applies: ctx => !!ctx.worktree,
+      run: ctx => openWorktreeTool('claude', ctx.worktree.path),
+    },
+  ];
+
+  async function openWorktreeTool(tool, path) {
+    const resp = await fetch('/worktree/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool, path }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || `Could not open ${tool} (${resp.status})`);
+  }
+
+  function trackedContext() {
+    if (!activeEntry) return null;
+    return {
+      label:    activeEntry.label,
+      type:     activeEntry.type,
+      jiraKey:  jiraKeyFromLabel(activeEntry.label),
+      worktree: findTrackedWorktree(),
+    };
+  }
+
+  function worktreeContext(wt) {
+    return {
+      label:    worktreeLabelSync(wt),
+      type:     'worktree',
+      jiraKey:  ticketKeyOf(wt.branch),
+      worktree: wt,
+    };
+  }
+
+  /** The worktree the running timer belongs to, if any is checked out for it. */
+  function findTrackedWorktree() {
+    if (!worktreeData) return null;
+    for (const repo of worktreeData.repos) {
+      const hit = repo.worktrees.find(isWorktreeActive);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  function renderContextActions(ctx, surface) {
+    const frag = document.createDocumentFragment();
+    if (!ctx) return frag;
+
+    ACTIONS.forEach(action => {
+      if (!action.surfaces.includes(surface)) return;
+      const verdict = action.applies(ctx);
+      if (!verdict) return;
+
+      const reason = typeof verdict === 'string' ? verdict : null;
+      const face   = surface === 'tracker' ? `${action.icon} ${action.label}` : action.icon;
+
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-sm btn-action';
+      btn.textContent = face;
+      btn.title = reason || action.title;
+      btn.disabled = !!reason;
+
+      if (!reason) {
+        btn.addEventListener('click', async e => {
+          e.preventDefault();
+          e.stopPropagation();
+          btn.disabled = true;
+          btn.textContent = '…';
+          try {
+            await action.run(ctx);
+          } catch (err) {
+            window.alert(err?.message || `${action.title} failed.`);
+          } finally {
+            btn.disabled = false;
+            btn.textContent = face;
+          }
+        });
+      }
+      frag.appendChild(btn);
+    });
+    return frag;
   }
 
   // ── Settings Modal ────────────────────────────────────────

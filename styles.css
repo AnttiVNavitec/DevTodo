@@ -583,6 +583,23 @@
     .tracker-actions { display: flex; gap: 4px; flex-shrink: 0; }
     .tracker-notify  { font-size: 11px; color: var(--yellow); flex-shrink: 0; }
 
+    /* ── Contextual action buttons ── */
+    .btn-action {
+      padding: 3px 7px;
+      font-size: 11px;
+      color: var(--text-muted);
+      border-color: transparent;
+      background: transparent;
+      font-family: 'SFMono-Regular', Consolas, monospace;
+    }
+    .btn-action:hover:not(:disabled) {
+      background: var(--surface2);
+      border-color: var(--border-light);
+      color: var(--text);
+    }
+    .btn-action:disabled { opacity: 0.4; }
+    .tracker-actions .btn-action { font-size: 12px; }
+
     /* ── Track button (▶ on items) ── */
     .btn-track { color: var(--local-green); border-color: transparent; background: transparent; }
     .btn-track:hover { background: rgba(16,185,129,0.1); border-color: var(--local-green); }

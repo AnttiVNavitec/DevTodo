@@ -75,17 +75,18 @@ aggregate into one summary row, and the tracked worktree is marked in the panel 
 on ticket key, so clocking in from the Jira panel lights up the worktree its branch lives
 in. Context-switch counting came for free.
 
-### Phase 4 — spawn tools in a worktree
+### Phase 4 — contextual actions — **done**
 
-- `POST /worktree/open` with `{path, tool}`, `tool` a **fixed enum**:
-  - `gitbash` → `C:\Program Files\Git\git-bash.exe --cd=<path>`
-  - `terminal` → `wt.exe -d <path>`
-  - `vscode` → `code <path>`
-  - `claude` → `wt.exe -d <path> cmd /c claude`
-  - `explorer` → `explorer <path>`
-- Security: POST only, never accept a command string from the client, and validate `path`
-  against the discovered worktree list (membership, not prefix). A CSRF-able localhost
-  process-spawn endpoint is a different risk class from the read-only Jira proxy.
+Generalised beyond launching, at the point of building it: rather than hard-coding
+buttons, there is a single **action registry** rendered onto two surfaces — the tracker
+bar (acting on the tracked item) and each worktree row. See CLAUDE.md → Contextual
+actions for the contract. Launchers happen to be the first five actions; downloading a
+ticket and opening Jira are already non-launchers, and phase 6's branch operations slot
+in as further actions rather than as new UI.
+
+Security held to the plan: fixed tool table server-side, no command string ever accepted
+from the client, path validated for membership in git's own worktree list, and a required
+matching `Origin` on the POST since it starts processes.
 
 ### Phase 5 — the forgetting problem
 
@@ -100,6 +101,10 @@ in. Context-switch counting came for free.
   has no single machine answer; worktree activity is evidence for suggestions, not truth.
 
 ### Phase 6 — branch operations
+Implement these as entries in the phase-4 action registry, not as bespoke buttons. Two
+are already implied by the tracker-bar context: when a tracked ticket has **no** worktree
+holding its branch, that is exactly where "check this branch out in an idle worktree" and
+"create this branch" belong — `applies()` can light them up precisely then.
 
 - Create branch on an idle+clean worktree: `git -C <wt> switch -c <name> <configured base branch>`.
 - Check out an existing branch on an idle+clean worktree.

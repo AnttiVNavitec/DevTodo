@@ -48,6 +48,12 @@ Each worktree has a ▶ button that starts the timer on whatever it has checked 
 
 The worktree currently holding the running timer is marked, and it is matched by ticket key — so clocking in from the Jira list also lights up the worktree that ticket's branch is checked out in, which is a quick way to find where you left the work.
 
+### Contextual actions
+
+The tracker bar carries the actions that apply to whatever you are currently tracking, and each worktree row carries the ones that apply to it. Tracking a ticket gets you a Jira link and a Markdown download of the ticket; if that ticket's branch is checked out somewhere, you also get one-click File Explorer, Git Bash, VS Code and Claude Code in that exact directory — which is the whole point when four worktrees are in play and you have lost track of which folder is which.
+
+Actions that cannot apply are left out rather than shown broken, and ones that are merely unavailable say why when you hover them. They are not all program launchers: the list is a registry, so checking a branch out in an idle worktree, or creating one that doesn't exist yet, will appear in the same place as the tools do.
+
 ## Pomodoro timer
 The tool now has integrated pomodoro timer. The timer will keep stats on how many succesful and interrupted pomodoro periods you have logged. The tool also keeps a counter of context switches you have had today (switching between two different tasks).
 

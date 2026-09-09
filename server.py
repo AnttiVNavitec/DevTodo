@@ -13,6 +13,7 @@ Endpoints proxied:
   GET /worktrees?root=<p>&root=... — git worktree status for the given repo roots
   GET /worktrees/scan?parent=<p>   — subdirectories of <p> that look like git checkouts
   GET /activity?days=<n>           — logged worktree activity signals
+  POST /worktree/open              — {tool, path}: open a tool in a known worktree
 """
 import http.server
 import urllib.request
@@ -28,6 +29,7 @@ from fetch_mr_comments import build_markdown, get_file_context, paginate, api_ge
 import jira_downloader
 import worktrees
 import activity
+import spawn
 
 PORT = 8080
 BIND = "127.0.0.1"
@@ -50,6 +52,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path.startswith('/proxy/jira/'):
             self._proxy_jira(parsed, method='POST')
+        elif parsed.path == '/worktree/open':
+            self._open_worktree_tool()
         else:
             self.send_error(404)
 
@@ -349,6 +353,70 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._json_ok({'records': activity.read_log(days), 'days': days})
         except Exception as exc:
             self._json_error(500, str(exc))
+
+    # ── Launch a tool in a worktree ───────────────────────────────────────────
+    def _require_dashboard_origin(self):
+        """
+        Stricter than _check_origin: the Origin header must be present and ours.
+
+        Browsers always send Origin on POST, so demanding it costs nothing and keeps this
+        endpoint — which starts processes — from being driven by anything but our page.
+        """
+        origin = self.headers.get('Origin', '').strip()
+        if origin not in ALLOWED_ORIGINS:
+            self._json_error(403, 'Forbidden: this endpoint only accepts dashboard requests')
+            return False
+        return True
+
+    def _open_worktree_tool(self):
+        if not self._require_dashboard_origin():
+            return
+
+        length = int(self.headers.get('Content-Length', 0) or 0)
+        try:
+            payload = json.loads(self.rfile.read(length) or b'{}')
+        except ValueError:
+            self._json_error(400, 'Body must be JSON')
+            return
+
+        tool = str(payload.get('tool') or '').strip()
+        path = str(payload.get('path') or '').strip()
+        if tool not in spawn.TOOLS:
+            self._json_error(400, f'Unknown tool: {tool}')
+            return
+        if not path:
+            self._json_error(400, 'Missing path')
+            return
+
+        # The path has to be one git itself reports as a worktree of a remembered root.
+        # Membership, not a prefix test — a prefix would let any subdirectory through.
+        try:
+            known = worktrees.list_worktrees(activity.load_roots())
+        except Exception as exc:
+            self._json_error(500, str(exc))
+            return
+
+        allowed = {
+            worktrees.path_key(wt['path'])
+            for repo in known['repos'] for wt in repo['worktrees']
+        }
+        if worktrees.path_key(path) not in allowed:
+            self._json_error(403, 'Not a known worktree directory')
+            return
+
+        try:
+            name = spawn.open_in(tool, path)
+        except spawn.ToolMissing as exc:
+            self._json_error(404, str(exc))
+            return
+        except ValueError as exc:
+            self._json_error(400, str(exc))
+            return
+        except Exception as exc:
+            self._json_error(500, f'Could not launch: {exc}')
+            return
+
+        self._json_ok({'ok': True, 'tool': tool, 'name': name, 'path': path})
 
     # ── HTTP forwarding ───────────────────────────────────────────────────────
     def _forward(self, url, headers, method='GET', body=None):
