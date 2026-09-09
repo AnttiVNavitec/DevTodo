@@ -54,6 +54,22 @@ The tracker bar carries the actions that apply to whatever you are currently tra
 
 Actions that cannot apply are left out rather than shown broken, and ones that are merely unavailable say why when you hover them. They are not all program launchers: the list is a registry, so checking a branch out in an idle worktree, or creating one that doesn't exist yet, will appear in the same place as the tools do.
 
+## Forgetting to clock in
+
+The most common way to lose hours is to start working without starting the timer. DevTODO attacks this from both ends.
+
+**While it is happening.** The dashboard watches your worktrees, and when one of them changes — a file saved, a commit made, a branch switched — while nothing is being tracked, a bar appears under the timer offering to start the clock on that worktree's task. If you are tracking something else, it offers to switch instead. It is a bar rather than a dialog on purpose: a popup that interrupts you mid-thought gets dismissed reflexively and teaches you to ignore it. Dismissing a nudge keeps it quiet for an hour, or until that worktree changes branch, since a new branch means a new task.
+
+**Afterwards.** The server keeps a small activity log for every worktree, and it keeps writing whether or not the dashboard is open in a browser. Open the time report and any stretch of the day where you demonstrably worked but logged nothing is listed at the top as "untracked work" — with the times, the duration and its best guess at the label. One click adds it as a normal time entry; one click hides it if that stretch really wasn't work.
+
+Some deliberate choices worth knowing, because they decide whether you trust the numbers:
+
+- A stretch is only claimed when there is evidence for it. The tool would rather miss ten minutes than put an hour you did not work into a timesheet.
+- Stretches are widened *backwards*, never forwards, because the work happened before the check that noticed it.
+- Any time entry counts as covered, whatever it is called. If you were clocked in on "Standup" while files changed, that time is accounted for and is not reported as missing.
+- Suggestions never overlap each other, so you can accept all of them without double-counting.
+- A stretch that spanned several branches is labelled with the one you touched most and marked with a small `+n`; hover it to see the others.
+
 ## Pomodoro timer
 The tool now has integrated pomodoro timer. The timer will keep stats on how many succesful and interrupted pomodoro periods you have logged. The tool also keeps a counter of context switches you have had today (switching between two different tasks).
 

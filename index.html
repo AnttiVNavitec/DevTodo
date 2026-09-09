@@ -52,6 +52,7 @@
 </header>
 
 <div id="trackerBar" class="tracker-bar"></div>
+<div id="nudgeBar" class="nudge-bar hidden"></div>
 
 <main class="main">
   <div class="columns">
@@ -355,6 +356,8 @@
   const KEY_POMO_STATE       = 'devtodo_pomo_state';
   const KEY_POMO_CYCLES      = 'devtodo_pomo_cycles';
   const KEY_CTX_SWITCHES     = 'devtodo_ctx_switches';
+  const KEY_NUDGE_DISMISS    = 'devtodo_nudge_dismissed';
+  const KEY_GAP_DISMISS      = 'devtodo_gap_dismissed';
 
   const POMO_WORK_MS  = 25 * 60 * 1000;
   const POMO_BREAK_MS =  5 * 60 * 1000;
@@ -385,6 +388,10 @@
   let activeSprint   = null;
   let jiraSummaries  = new Map();   // issue key → summary, warmed by whatever Jira returns
   let worktreeData   = null;        // last /worktrees response, so renders need no refetch
+  let worktreeChanges = new Map();  // path → { fp, at } — when this worktree last changed
+  let nudgeDismissed = loadJson(KEY_NUDGE_DISMISS, {});   // path → { branch, at }
+  let gapDismissed   = loadJson(KEY_GAP_DISMISS, {});     // gap id → true
+  let activityRecords = [];         // last /activity response, read by the time report
 
   // ── Helpers ───────────────────────────────────────────────
   function loadSettings() {
@@ -411,6 +418,11 @@
   function saveTodos() { localStorage.setItem(KEY_TODOS, JSON.stringify(localTodos)); }
 
   function deepClone(obj) { return JSON.parse(JSON.stringify(obj)); }
+
+  function loadJson(key, fallback) {
+    try { return JSON.parse(localStorage.getItem(key)) ?? fallback; }
+    catch { return fallback; }
+  }
 
   /** Sanitise a string for safe innerHTML insertion */
   function esc(str) {
@@ -809,6 +821,7 @@
     saveActiveEntry();
     renderTracker();
     renderWorktrees();
+    renderNudges();
   }
 
   function clockOut(endedAt) {
@@ -820,6 +833,7 @@
     saveActiveEntry();
     renderTracker();
     renderWorktrees();
+    renderNudges();
   }
 
   function checkAutoClockout() {
@@ -926,6 +940,8 @@
     summarySelection = new Set();
     renderTimeReport();
     $id('timeReportModal').classList.remove('hidden');
+    // One fetch covers every navigable day; re-render once the gaps are known
+    loadActivity().then(renderTimeReport);
   }
 
   function closeTimeReport() {
@@ -955,6 +971,7 @@
         <button class="btn btn-sm btn-icon" id="reportNext" ${nextDis}>›</button>
       </div>
       ${buildDayStats(reportDate)}
+      <div id="reportGaps" class="report-gaps"></div>
       <div class="report-tabs">
         <button class="report-tab${reportTab === 'log' ? ' active' : ''}" data-rtab="log">Log</button>
         <button class="report-tab${reportTab === 'summary' ? ' active' : ''}" data-rtab="summary">Summary</button>
@@ -982,6 +999,10 @@
         renderTimeReport();
       });
     });
+
+    // Before the empty-day bail-out: a day with no entries at all is exactly the day
+    // where untracked work matters most.
+    renderReportGaps();
 
     if (dayEntries.length === 0 && !showActive) {
       $id('reportTabContent').innerHTML = '<div class="report-empty">No tracked time on this day.</div>';
@@ -2077,7 +2098,9 @@ async function fetchEpicChildren(epicKey) {
         throw new Error(payload.error || `Worktree scan failed (${resp.status})`);
       }
       worktreeData = await resp.json();
+      trackWorktreeChanges(worktreeData);
       renderWorktrees();
+      renderNudges();
     } catch (err) {
       $id('worktreeBody').innerHTML = `<div class="error-state">⚠️ ${esc(err.message)}</div>`;
       $id('worktreeCount').textContent = '!';
@@ -2250,6 +2273,308 @@ async function fetchEpicChildren(epicKey) {
       frag.appendChild(btn);
     });
     return frag;
+  }
+
+  // ── Nudges & gaps ─────────────────────────────────────────
+  // Two halves of the same problem: forgetting to clock in.
+  //
+  // The nudge is live and client-side — it compares consecutive /worktrees polls, so it
+  // reacts within ~10s instead of waiting on the server's 60s activity poll. It only runs
+  // while the tab is visible, which is fine: a nudge you cannot see is pointless, and the
+  // fingerprint comparison fires the moment you come back.
+  //
+  // The gap finder is retroactive and reads the server's activity log, which keeps
+  // collecting with no tab open. That is the half that catches a whole afternoon.
+
+  const NUDGE_WINDOW_MS  = 10 * 60000;  // treat a worktree as "being worked in" this long
+  const NUDGE_DISMISS_MS = 60 * 60000;  // a dismissal lasts this long, or until the branch changes
+
+  // Observations, not work: `start` fires on every server restart and `heartbeat` fires
+  // on a timer, so counting either would invent activity that never happened.
+  const WORK_REASONS  = new Set(['branch', 'commit', 'files', 'claude']);
+  const SESSION_GAP_MS = 15 * 60000;    // events further apart than this are separate sessions
+  const MIN_SESSION_MS =  5 * 60000;    // a lone event still implies a few minutes of work
+  const MIN_GAP_MS     =  5 * 60000;    // below this a gap is noise, not a forgotten task
+  const POLL_LEAD_MS   = 60000;         // a change is noticed up to one server poll late
+
+  function worktreeFingerprint(wt) {
+    const d = wt.dirty || {};
+    return [wt.branch, wt.head, d.staged, d.unstaged, d.untracked, d.conflicted].join('|');
+  }
+
+  /** Records when each worktree last changed. Called on every /worktrees poll. */
+  function trackWorktreeChanges(data) {
+    const now = Date.now();
+    (data.repos || []).forEach(repo => (repo.worktrees || []).forEach(wt => {
+      if (wt.bare) return;
+      const fp   = worktreeFingerprint(wt);
+      const prev = worktreeChanges.get(wt.path);
+      // No previous sample means no evidence of change — establish a baseline silently,
+      // otherwise every page load would nudge for every worktree.
+      if (!prev)              worktreeChanges.set(wt.path, { fp, at: 0 });
+      else if (prev.fp !== fp) worktreeChanges.set(wt.path, { fp, at: now });
+    }));
+  }
+
+  function isNudgeDismissed(wt) {
+    const d = nudgeDismissed[wt.path];
+    if (!d) return false;
+    if (d.branch !== wt.branch) return false;          // new branch is a new task
+    return Date.now() - d.at < NUDGE_DISMISS_MS;
+  }
+
+  function dismissNudge(wt) {
+    nudgeDismissed[wt.path] = { branch: wt.branch, at: Date.now() };
+    localStorage.setItem(KEY_NUDGE_DISMISS, JSON.stringify(nudgeDismissed));
+    renderNudges();
+  }
+
+  /** Worktrees changed recently that the running timer does not account for. */
+  function pendingNudges() {
+    if (!worktreeData) return [];
+    const now = Date.now();
+    const out = [];
+    worktreeData.repos.forEach(repo => (repo.worktrees || []).forEach(wt => {
+      const change = worktreeChanges.get(wt.path);
+      if (!change || !change.at) return;
+      if (now - change.at > NUDGE_WINDOW_MS) return;
+      if (isWorktreeActive(wt)) return;                // already tracking this one
+      if (isNudgeDismissed(wt)) return;
+      out.push(wt);
+    }));
+    return out;
+  }
+
+  function renderNudges() {
+    const bar = $id('nudgeBar');
+    if (!bar) return;
+
+    const list = pendingNudges();
+    if (list.length === 0) {
+      bar.classList.add('hidden');
+      bar.innerHTML = '';
+      return;
+    }
+
+    bar.classList.remove('hidden');
+    bar.innerHTML = '';
+
+    list.forEach(wt => {
+      const label = worktreeLabelSync(wt);
+      const chip  = document.createElement('div');
+      chip.className = 'nudge';
+      chip.innerHTML = activeEntry
+        ? `<span class="nudge-icon">⎇</span>
+           <span class="nudge-text">Work in <strong>${esc(wt.name)}</strong> while you track
+             <em>${esc(activeEntry.label)}</em> — switch to <em>${esc(label)}</em>?</span>`
+        : `<span class="nudge-icon">⏱</span>
+           <span class="nudge-text">Work in <strong>${esc(wt.name)}</strong> and nothing is being
+             tracked — start <em>${esc(label)}</em>?</span>`;
+
+      const go = document.createElement('button');
+      go.className = 'btn btn-sm btn-primary';
+      go.textContent = activeEntry ? '▶ Switch' : '▶ Clock in';
+      go.title = label;
+      go.addEventListener('click', async () => {
+        go.disabled = true;
+        try { clockIn(await worktreeLabel(wt), 'worktree', false); }
+        finally { go.disabled = false; }
+      });
+
+      const no = document.createElement('button');
+      no.className = 'btn btn-sm';
+      no.textContent = 'Dismiss';
+      no.addEventListener('click', () => dismissNudge(wt));
+
+      chip.appendChild(go);
+      chip.appendChild(no);
+      bar.appendChild(chip);
+    });
+  }
+
+  // ── Retroactive gap finding ───────────────────────────────
+  async function loadActivity() {
+    try {
+      const resp = await fetch('/activity?days=14');
+      if (!resp.ok) return;
+      const data = await resp.json();
+      activityRecords = data.records || [];
+    } catch { /* the report just shows no gaps */ }
+  }
+
+  /** Remove `covered` (merged, sorted) from `[start, end]`, returning what's left. */
+  function subtractCovered([start, end], covered) {
+    let pieces = [[start, end]];
+    covered.forEach(([cs, ce]) => {
+      const next = [];
+      pieces.forEach(([ps, pe]) => {
+        if (ce <= ps || cs >= pe) { next.push([ps, pe]); return; }  // no overlap
+        if (cs > ps) next.push([ps, cs]);
+        if (ce < pe) next.push([ce, pe]);
+      });
+      pieces = next;
+    });
+    return pieces;
+  }
+
+  function mergedCoverage(dateStr) {
+    const spans = entriesForDate(dateStr)
+      .map(e => [+new Date(e.startedAt), +new Date(e.endedAt)]);
+    if (activeEntry && activeEntry.startedAt.slice(0, 10) === dateStr) {
+      spans.push([+new Date(activeEntry.startedAt), Date.now()]);
+    }
+    spans.sort((a, b) => a[0] - b[0]);
+
+    const merged = [];
+    spans.forEach(span => {
+      const last = merged[merged.length - 1];
+      if (last && span[0] <= last[1]) last[1] = Math.max(last[1], span[1]);
+      else merged.push([...span]);
+    });
+    return merged;
+  }
+
+  /**
+   * Stretches of the day with recorded work in a worktree but no time entry over them.
+   *
+   * Any entry counts as coverage regardless of its label: if you were clocked in on
+   * something, the hour is accounted for. Mislabelled time is a different problem, and
+   * reporting it here would bury the real gaps.
+   */
+  function findGaps(dateStr) {
+    const work = activityRecords
+      .filter(r => r.ts && r.ts.slice(0, 10) === dateStr && r.path)
+      .filter(r => (r.why || []).some(w => WORK_REASONS.has(w)))
+      .sort((a, b) => (a.ts < b.ts ? -1 : 1));
+    if (work.length === 0) return [];
+
+    // One session per stretch of activity ANYWHERE, not per worktree. That consolidation
+    // is the whole trick: grouping per branch turns a morning of branch-hopping into a
+    // page of five-minute slivers that overlap each other and can't all be accepted.
+    const sessions = [];
+    work.forEach(r => {
+      const t = +new Date(r.ts);
+      const current = sessions[sessions.length - 1];
+      if (current && t - current.end <= SESSION_GAP_MS) {
+        current.end = t;
+        current.records.push(r);
+      } else {
+        sessions.push({ start: t, end: t, records: [r] });
+      }
+    });
+
+    const covered  = mergedCoverage(dateStr);
+    const now      = Date.now();
+    const dayStart = +new Date(`${dateStr}T00:00:00Z`);
+    const gaps     = [];
+
+    sessions.forEach(s => {
+      // Work happens BEFORE the poll that notices it, so sessions widen backwards.
+      // Padding forwards would claim time after the user had already stopped.
+      const end = Math.min(s.end, now);
+      let start = s.start - POLL_LEAD_MS;
+      if (end - start < MIN_SESSION_MS) start = end - MIN_SESSION_MS;
+      start = Math.max(start, dayStart);
+      if (end <= start) return;
+
+      // Name the stretch after whatever was touched most in it, ties to the most recent.
+      // A stretch spanning several branches lists the rest, so it reads as mixed.
+      const counts = new Map();
+      s.records.forEach(r => {
+        const key = JSON.stringify([r.path, r.branch || '']);
+        const seen = counts.get(key) || { n: 0, last: 0, rec: r };
+        seen.n += 1;
+        const t = +new Date(r.ts);
+        if (t >= seen.last) { seen.last = t; seen.rec = r; }
+        counts.set(key, seen);
+      });
+      const ranked  = [...counts.values()].sort((a, b) => b.n - a.n || b.last - a.last);
+      const primary = ranked[0].rec;
+      const others  = ranked.slice(1)
+        .map(e => worktreeLabelSync({ branch: e.rec.branch, name: e.rec.name }));
+
+      subtractCovered([start, end], covered).forEach(([a, b]) => {
+        if (b - a < MIN_GAP_MS) return;
+        const id = JSON.stringify([primary.path, primary.branch, new Date(a).toISOString()]);
+        if (gapDismissed[id]) return;
+        gaps.push({
+          id, start: a, end: b, others,
+          label: worktreeLabelSync({ branch: primary.branch, name: primary.name }),
+          name: primary.name, branch: primary.branch,
+        });
+      });
+    });
+
+    return gaps.sort((a, b) => a.start - b.start);
+  }
+
+  function acceptGap(gap) {
+    timeEntries.push({
+      id: Date.now(),
+      label: gap.label,
+      type: 'worktree',
+      startedAt: new Date(gap.start).toISOString(),
+      endedAt: new Date(gap.end).toISOString(),
+    });
+    timeEntries.sort((a, b) => (a.startedAt < b.startedAt ? -1 : 1));
+    saveTimeEntries();
+    renderTracker();
+    renderTimeReport();
+  }
+
+  function dismissGap(gap) {
+    gapDismissed[gap.id] = true;
+    localStorage.setItem(KEY_GAP_DISMISS, JSON.stringify(gapDismissed));
+    renderTimeReport();
+  }
+
+  function renderReportGaps() {
+    const host = $id('reportGaps');
+    if (!host) return;
+
+    const gaps = findGaps(reportDate);
+    if (gaps.length === 0) {
+      host.innerHTML = '';
+      return;
+    }
+
+    const totalMs = gaps.reduce((s, g) => s + (g.end - g.start), 0);
+    host.innerHTML = `
+      <div class="gaps-head">
+        <span class="gaps-title">Untracked work</span>
+        <span class="gaps-total">${esc(fmtDuration(totalMs))} across ${gaps.length}
+          ${gaps.length === 1 ? 'stretch' : 'stretches'}</span>
+      </div>
+      <div class="gaps-list"></div>`;
+
+    const list = host.querySelector('.gaps-list');
+    gaps.forEach(gap => {
+      const row = document.createElement('div');
+      row.className = 'gap-row';
+      const mixed = gap.others.length
+        ? `<span class="gap-others" title="Also touched in this stretch:&#10;${esc(gap.others.join('\n'))}">+${gap.others.length}</span>`
+        : '';
+      row.innerHTML = `
+        <span class="gap-when">${esc(fmtTime(new Date(gap.start).toISOString()))}–${esc(fmtTime(new Date(gap.end).toISOString()))}</span>
+        <span class="gap-dur">${esc(fmtDuration(gap.end - gap.start))}</span>
+        <span class="gap-label" title="${esc(gap.name)} · ${esc(gap.branch || '')}">${esc(gap.label)}</span>
+        ${mixed}`;
+
+      const add = document.createElement('button');
+      add.className = 'btn btn-sm btn-primary';
+      add.textContent = 'Add';
+      add.addEventListener('click', () => acceptGap(gap));
+
+      const drop = document.createElement('button');
+      drop.className = 'btn btn-sm';
+      drop.textContent = '✕';
+      drop.title = 'Not work — hide this suggestion';
+      drop.addEventListener('click', () => dismissGap(gap));
+
+      row.appendChild(add);
+      row.appendChild(drop);
+      list.appendChild(row);
+    });
   }
 
   // ── Settings Modal ────────────────────────────────────────

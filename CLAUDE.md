@@ -40,6 +40,7 @@ Grep for `// ── <name>` to jump directly. Sections in order:
 | `MR ranking` | `mrRank` |
 | `Local Todos` | `renderTodos`, `addTodo` |
 | `Worktrees` | `ticketKeyOf`, `fmtAgo`, `worktreeLabel`/`worktreeLabelSync`, `isWorktreeActive`, `buildWorktreeItem`, `renderWorktrees`, `loadWorktrees`, `scanForRepos`, `parseRoots` |
+| `Nudges & gaps` | `trackWorktreeChanges`, `pendingNudges`, `renderNudges`, `loadActivity`, `findGaps`, `subtractCovered`, `mergedCoverage`, `acceptGap`, `renderReportGaps` |
 | `Contextual actions` | `ACTIONS` registry, `openWorktreeTool`, `trackedContext`, `worktreeContext`, `findTrackedWorktree`, `renderContextActions` |
 | `Settings Modal` | `openSettings`, `closeSettings`, `collectSettings` |
 | `Event wiring` | All `addEventListener` calls |
@@ -61,11 +62,13 @@ reportDate        YYYY-MM-DD string driving the time report modal
 reportTab         'log' | 'summary'
 summarySelection  Set<label> of checked rows in summary view
 jiraSummaries     Map<issueKey, summary> — warmed by loadJira/loadEpicPanel
+worktreeChanges   Map<path, {fp, at}> — when each worktree last changed (drives nudges)
+activityRecords   last /activity response, read by the gap finder
 worktreeData      last /worktrees response; renderWorktrees() reads it without refetching
 ```
 
 ## Storage keys (all `devtodo_*`)
-`settings`, `todos`, `show_unassigned`, `time_entries`, `time_active`, `time_suggestions`, `epic`, `pomo_state`, `pomo_cycles`, `ctx_switches`
+`settings`, `todos`, `show_unassigned`, `time_entries`, `time_active`, `time_suggestions`, `epic`, `pomo_state`, `pomo_cycles`, `ctx_switches`, `nudge_dismissed`, `gap_dismissed`
 
 ## Activity logging (`activity.py`)
 Runs on a daemon thread started by `server.py`, independent of the browser, so it keeps
@@ -118,6 +121,44 @@ itself reports as a worktree (membership, not prefix — a prefix test would let
 subdirectory through). `POST /worktree/open` additionally requires a present, matching
 `Origin` header, which is stricter than the read-only routes: it starts processes.
 
+## Nudges & gaps — the "I forgot to clock in" problem
+Two halves, deliberately using different data sources:
+
+**Live nudge** (`renderNudges`) is client-side. It diffs consecutive `/worktrees` polls, so
+it reacts in ~10s rather than waiting on the server's 60s activity poll. It only runs while
+the tab is visible — which is fine, since a nudge you can't see is useless, and the
+fingerprint diff fires the moment you come back. A worktree with no previous sample gets a
+silent baseline, or every page load would nudge for everything.
+Shown when: changed within `NUDGE_WINDOW_MS` (10 min), `isWorktreeActive()` is false, and
+not dismissed. A dismissal lasts `NUDGE_DISMISS_MS` (60 min) **or until the branch changes**,
+since a new branch is a new task.
+
+**Gap finder** (`findGaps`) is retroactive and reads the server's activity log, which keeps
+collecting with no browser open. That's the half that recovers a whole afternoon. Rules
+that matter, all learned from running it against real data:
+
+- **`start` and `heartbeat` are not work.** `start` fires on every server restart and
+  `heartbeat` on a timer; counting either invents activity. Only
+  `WORK_REASONS = {branch, commit, files, claude}` count.
+- **Sessions consolidate across worktrees, not per branch.** Per-branch grouping turned one
+  morning of branch-hopping into 15 five-minute slivers that *overlapped each other* — so
+  they could not all be accepted without double-counting. One session per stretch of
+  activity anywhere, labelled by whatever was touched most in it, with the other branches
+  listed via `others` so a mixed stretch reads as mixed.
+- **Sessions widen backwards**, by `POLL_LEAD_MS`. Work happens *before* the poll that
+  notices it; padding forwards would claim time after the user had stopped.
+- **Any time entry counts as coverage, whatever its label.** If you were clocked in on
+  something, the hour is accounted for. Mislabelled time is a different problem and
+  surfacing it here would bury the real gaps.
+- Gaps are rendered **before** the report's empty-day bail-out: a day with no entries at
+  all is exactly the day where untracked work matters most.
+- Suggestions are guaranteed non-overlapping. Keep it that way — accepting two overlapping
+  rows would double-count.
+
+Both `days` bucketing and coverage use `ts.slice(0, 10)`, i.e. **UTC** days, matching
+`entriesForDate()` and `todayStr()`. That's a pre-existing app-wide quirk; the gap finder
+matches it on purpose so gaps and entries line up.
+
 ## Conventions
 - XSS: always wrap user/external strings with `esc()` before innerHTML
 - No comments in code unless the why is non-obvious
@@ -145,3 +186,6 @@ subdirectory through). `POST /worktree/open` additionally requires a present, ma
   under the cursor.
 - **Nothing repo-, product- or employer-specific in the code.** This repo is public.
   Repo paths, project keys and base branches are settings, never constants.
+- No raw control characters in source. Use `JSON.stringify([...])` for composite map keys
+  rather than a separator byte — one crept in as a literal `0x1f` and was invisible.
+- `index.html` is **CRLF**. Scripted edits must preserve that.

@@ -88,17 +88,22 @@ Security held to the plan: fixed tool table server-side, no command string ever 
 from the client, path validated for membership in git's own worktree list, and a required
 matching `Origin` on the POST since it starts processes.
 
-### Phase 5 — the forgetting problem
+### Phase 5 — the forgetting problem — **done**
 
-- **Live nudge:** non-modal chip in the tracker bar when a worktree's HEAD changes, or
-  when files change in a worktree while `activeEntry` is null or its label matches no
-  active worktree. `<worktree> → ABC-1234 … [Clock in] [Dismiss]`. Non-modal on purpose;
-  a dialog mid-thought gets dismissed reflexively.
-- **Retroactive fill:** the time report grows a "gaps" affordance — "17:40–18:25 activity
-  in <worktree> on ABC-1234, nothing clocked in — add it?" Derived entirely
-  from the phase-2 signal log.
-- The timer stays **single-valued**. When three agents run at once, "which task am I on"
-  has no single machine answer; worktree activity is evidence for suggestions, not truth.
+Both halves built; see CLAUDE.md → Nudges & gaps for the rules. The nudge went in a
+dedicated bar under the tracker bar rather than inside it — the tracker bar was already
+full once phase 4 added contextual actions.
+
+The plan's per-worktree gap grouping had to be **thrown out** after running it against a
+real day of signals: it produced 15 overlapping five-minute slivers instead of a usable
+handful, and overlapping suggestions cannot all be accepted without double-counting time.
+Sessions now consolidate across worktrees and are labelled by the dominant branch. Two
+other corrections came from the same exercise: `start`/`heartbeat` records must not count
+as work, and sessions must widen *backwards*, since work precedes the poll that sees it.
+
+The timer stayed **single-valued** as planned. When three agents run at once, "which task
+am I on" has no single machine answer; worktree activity is evidence for a suggestion,
+never truth.
 
 ### Phase 6 — branch operations
 Implement these as entries in the phase-4 action registry, not as bespoke buttons. Two
