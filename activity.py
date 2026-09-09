@@ -16,7 +16,6 @@ is distinguishable from "the poller was not running".
 
 Nothing here knows anything about specific repos; roots come from the dashboard.
 """
-import glob
 import json
 import os
 import threading
@@ -32,7 +31,6 @@ ROOTS_PATH = os.path.join(DATA_DIR, 'roots.json')
 POLL_SEC = 60
 HEARTBEAT_SEC = 900          # force a record this often even when nothing changed
 RETENTION_DAYS = 14          # matches the dashboard's own time-entry pruning
-CLAUDE_PROJECTS = os.path.join(os.path.expanduser('~'), '.claude', 'projects')
 
 _lock = threading.Lock()
 _last = {}                   # worktree path key → {'fp': tuple, 'ts': float, 'claudeAt': float}
@@ -46,12 +44,6 @@ def _now():
 
 def _iso(dt):
     return dt.isoformat(timespec='seconds').replace('+00:00', 'Z')
-
-
-def _iso_epoch(epoch):
-    if not epoch:
-        return None
-    return _iso(datetime.fromtimestamp(epoch, timezone.utc))
 
 
 def _ensure_dir():
@@ -89,71 +81,6 @@ def load_roots():
         return _read_roots()
 
 
-# ── Claude Code transcript probe ─────────────────────────────────────────────
-# Claude Code keeps a session transcript per working directory under
-# ~/.claude/projects/<mangled-path>/*.jsonl. The newest mtime in that directory is a good
-# proxy for "an agent was doing something here". This layout is not a documented
-# interface, so every failure path here degrades to "no signal" rather than raising.
-def _mangle(path):
-    """Mangle a filesystem path the way Claude Code names its project directories."""
-    norm = os.path.normpath(str(path)).replace('\\', '-').replace('/', '-').replace(':', '-')
-    # The drive letter is lowercased; the rest of the path keeps its case
-    return (norm[:1].lower() + norm[1:]) if norm else norm
-
-
-def claude_activity(worktree_paths):
-    """
-    Map each worktree path → epoch seconds of the newest Claude transcript write, or None.
-
-    A session started in a subdirectory of a worktree gets a longer mangled name, so each
-    project directory is attributed to the *longest* matching worktree. Without that,
-    `<repo>-worktree` activity would be credited to `<repo>`.
-    """
-    result = {worktrees.path_key(p): None for p in worktree_paths}
-    if not os.path.isdir(CLAUDE_PROJECTS):
-        return result
-
-    candidates = [(worktrees.path_key(p), _mangle(p).casefold()) for p in worktree_paths]
-
-    try:
-        entries = list(os.scandir(CLAUDE_PROJECTS))
-    except OSError:
-        return result
-
-    for entry in entries:
-        try:
-            if not entry.is_dir():
-                continue
-        except OSError:
-            continue
-
-        name = entry.name.casefold()
-        best_key, best_len = None, -1
-        for key, mangled in candidates:
-            if name == mangled or name.startswith(mangled + '-'):
-                if len(mangled) > best_len:
-                    best_key, best_len = key, len(mangled)
-        if best_key is None:
-            continue
-
-        newest = None
-        try:
-            for f in glob.iglob(os.path.join(glob.escape(entry.path), '*.jsonl')):
-                try:
-                    mtime = os.stat(f).st_mtime
-                except OSError:
-                    continue
-                if newest is None or mtime > newest:
-                    newest = mtime
-        except OSError:
-            continue
-
-        if newest is not None and (result[best_key] is None or newest > result[best_key]):
-            result[best_key] = newest
-
-    return result
-
-
 # ── Log writing ──────────────────────────────────────────────────────────────
 def _fingerprint(wt):
     d = wt.get('dirty') or {}
@@ -183,7 +110,6 @@ def poll_once(roots=None):
     data = worktrees.list_worktrees(roots)
     flat = [wt for repo in data['repos'] for wt in repo['worktrees'] if not wt.get('bare')]
 
-    claude = claude_activity([wt['path'] for wt in flat])
     now = time.time()
     now_iso = _iso(_now())
     records = []
@@ -226,7 +152,7 @@ def poll_once(roots=None):
         for wt in flat:
             key = worktrees.path_key(wt['path'])
             fp = _fingerprint(wt)
-            claude_at = claude.get(key)
+            claude_at = wt.get('claudeAt')
             prev = _last.get(key)
 
             why = []
@@ -263,7 +189,7 @@ def poll_once(roots=None):
                 'main': bool(wt.get('isMain')),
                 'dirty': d.get('total'),
                 'split': [d.get('staged'), d.get('unstaged'), d.get('untracked'), d.get('conflicted')],
-                'claudeAt': _iso_epoch(claude_at),
+                'claudeAt': claude_at,
             })
             if wt.get('error'):
                 records[-1]['error'] = wt['error']

@@ -14,6 +14,8 @@ Endpoints proxied:
   GET /worktrees/scan?parent=<p>   — subdirectories of <p> that look like git checkouts
   GET /activity?days=<n>           — logged worktree activity signals
   POST /worktree/open              — {tool, path}: open a tool in a known worktree
+  GET  /worktree/branches?path=<p>  — local/remote branches and the repo's base branch
+  POST /worktree/git               — {operation, params}: branch and worktree operations
 """
 import http.server
 import urllib.request
@@ -30,6 +32,7 @@ import jira_downloader
 import worktrees
 import activity
 import spawn
+import gitops
 
 PORT = 8080
 BIND = "127.0.0.1"
@@ -54,6 +57,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._proxy_jira(parsed, method='POST')
         elif parsed.path == '/worktree/open':
             self._open_worktree_tool()
+        elif parsed.path == '/worktree/git':
+            self._worktree_git()
         else:
             self.send_error(404)
 
@@ -82,6 +87,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._scan_repos(parsed)
         elif path == '/activity':
             self._activity_log(parsed)
+        elif path == '/worktree/branches':
+            self._worktree_branches(parsed)
         elif path.startswith('/proxy/jira/'):
             self._proxy_jira(parsed)
         elif path.startswith('/proxy/gitlab/'):
@@ -417,6 +424,51 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return
 
         self._json_ok({'ok': True, 'tool': tool, 'name': name, 'path': path})
+
+    def _worktree_branches(self, parsed):
+        if not self._check_origin():
+            return
+        path = (urllib.parse.parse_qs(parsed.query).get('path') or [''])[0].strip()
+        if not path:
+            self._json_error(400, 'Missing required query parameter: path')
+            return
+        try:
+            self._json_ok(gitops.branches(activity.load_roots(), path))
+        except gitops.Refused as exc:
+            self._json_error(403, str(exc))
+        except Exception as exc:
+            self._json_error(500, str(exc))
+
+    def _worktree_git(self):
+        # Mutating, so the same strict origin rule as process spawning applies
+        if not self._require_dashboard_origin():
+            return
+
+        length = int(self.headers.get('Content-Length', 0) or 0)
+        try:
+            payload = json.loads(self.rfile.read(length) or b'{}')
+        except ValueError:
+            self._json_error(400, 'Body must be JSON')
+            return
+
+        operation = str(payload.get('operation') or '').strip()
+        params = payload.get('params') or {}
+        if not isinstance(params, dict):
+            self._json_error(400, 'params must be an object')
+            return
+        if operation not in gitops.OPERATIONS:
+            self._json_error(400, f'Unknown operation: {operation}')
+            return
+
+        try:
+            self._json_ok(gitops.run(operation, activity.load_roots(), params))
+        except gitops.Refused as exc:
+            # 409: the request was well formed, the worktree just isn't in a fit state
+            self._json_error(409, str(exc))
+        except gitops.GitFailed as exc:
+            self._json_error(422, exc.stderr or 'git failed')
+        except Exception as exc:
+            self._json_error(500, str(exc))
 
     # ── HTTP forwarding ───────────────────────────────────────────────────────
     def _forward(self, url, headers, method='GET', body=None):

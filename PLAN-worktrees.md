@@ -105,7 +105,7 @@ The timer stayed **single-valued** as planned. When three agents run at once, "w
 am I on" has no single machine answer; worktree activity is evidence for a suggestion,
 never truth.
 
-### Phase 6 — branch operations
+### Phase 6 — branch operations — **done**
 Implement these as entries in the phase-4 action registry, not as bespoke buttons. Two
 are already implied by the tracker-bar context: when a tracked ticket has **no** worktree
 holding its branch, that is exactly where "check this branch out in an idle worktree" and

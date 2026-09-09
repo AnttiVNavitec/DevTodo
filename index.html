@@ -292,6 +292,14 @@
             <div class="form-hint" id="s-wt-scan-status">Adds every git checkout directly inside that folder to the list above.</div>
           </div>
         </div>
+        <div class="form-section">
+          <div class="form-section-title">Branch picker</div>
+          <div class="form-group">
+            <label class="form-label" for="s-wt-structural">Long-lived branches</label>
+            <input class="form-input" id="s-wt-structural" spellcheck="false" placeholder="release/*">
+            <div class="form-hint">Globs, comma separated. Always offered in the picker alongside your tickets and merge requests. The repo's own default branch is detected from <code>origin/HEAD</code> and never needs listing.</div>
+          </div>
+        </div>
       </div>
     </div>
     <div class="modal-footer">
@@ -326,6 +334,18 @@
       <button class="btn" id="cancelOtherWork">Cancel</button>
       <button class="btn btn-primary" id="submitOtherWork">▶ Start</button>
     </div>
+  </div>
+</div>
+
+<!-- ── Git operation modal (branch picker, create branch, add worktree) ── -->
+<div class="modal-overlay hidden" id="opModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="opTitle" style="max-width:600px">
+    <div class="modal-header">
+      <div class="modal-title" id="opTitle">Branches</div>
+      <button class="modal-close" id="closeOp" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body" id="opBody"></div>
+    <div class="modal-footer" id="opFooter"></div>
   </div>
 </div>
 
@@ -367,7 +387,7 @@
     jira:   { url: '', email: '', token: '', supportProject: '', supportStatus: 'To Do', supportComponent: '' },
     gitlab: { url: 'https://gitlab.com', username: '', token: '' },
     pomo:   { notification: 'browser' },
-    worktrees: { roots: [], scanParent: '' },
+    worktrees: { roots: [], scanParent: '', structural: 'release/*' },
   };
 
   // ── State ─────────────────────────────────────────────────
@@ -392,6 +412,7 @@
   let nudgeDismissed = loadJson(KEY_NUDGE_DISMISS, {});   // path → { branch, at }
   let gapDismissed   = loadJson(KEY_GAP_DISMISS, {});     // gap id → true
   let activityRecords = [];         // last /activity response, read by the time report
+  let mrBranches = new Map();       // source branch → MR, so branch pickers can offer them
 
   // ── Helpers ───────────────────────────────────────────────
   function loadSettings() {
@@ -1773,6 +1794,10 @@ async function fetchEpicChildren(epicKey) {
 
     try {
       const mrs = await fetchGitLabMRs();
+      // The branch picker offers these: reviewing someone's MR means checking out its
+      // source branch, which may not exist locally yet.
+      mrBranches = new Map();
+      mrs.forEach(mr => { if (mr.source_branch) mrBranches.set(mr.source_branch, mr); });
       body.innerHTML = '';
 
       if (mrs.length === 0) {
@@ -2024,6 +2049,33 @@ async function fetchEpicChildren(epicKey) {
     return el;
   }
 
+  /** Repo heading with the worktree-lifecycle actions that belong to the repo, not a row. */
+  function buildRepoDivider(repo, count) {
+    const el = document.createElement('div');
+    el.className = 'section-divider';
+    el.innerHTML = `<span class="divider-label">${esc(repo.name)} (${count})</span>
+                    <div class="divider-line"></div>`;
+
+    const add = document.createElement('button');
+    add.className = 'btn btn-sm btn-action';
+    add.textContent = '+⌸';
+    add.title = 'Add a worktree to this repository';
+    add.addEventListener('click', () => openAddWorktreeDialog(repo));
+    el.appendChild(add);
+
+    // Only worth offering when git has actually flagged something
+    if (repo.worktrees.some(w => w.prunable)) {
+      const prune = document.createElement('button');
+      prune.className = 'btn btn-sm btn-action';
+      prune.textContent = 'Prune';
+      prune.title = 'Drop records for worktrees whose folders are gone';
+      prune.addEventListener('click', () => performOp(
+        prune, 'prune', { path: repo.worktrees[0].path }));
+      el.appendChild(prune);
+    }
+    return el;
+  }
+
   /** Renders from the last fetch, so clocking in or out can repaint the panel without
    *  shelling out to git again. */
   function renderWorktrees() {
@@ -2059,7 +2111,7 @@ async function fetchEpicChildren(epicKey) {
         if (a.isMain !== b.isMain) return a.isMain ? -1 : 1;
         return a.name.localeCompare(b.name);
       });
-      body.appendChild(divider(`${repo.name} (${sorted.length})`));
+      body.appendChild(buildRepoDivider(repo, sorted.length));
       sorted.forEach(wt => { body.appendChild(buildWorktreeItem(wt)); total += 1; });
     });
 
@@ -2137,6 +2189,473 @@ async function fetchEpicChildren(epicKey) {
     return text.split('\n').map(l => l.trim().replace(/\\/g, '/')).filter(Boolean);
   }
 
+  // ── Branch operations ─────────────────────────────────────
+  // The picker deliberately does NOT offer every branch — there are hundreds, and the
+  // command line is the escape hatch for the rest. Instead it offers what the dashboard
+  // already knows is relevant: my Jira tickets, my merge requests, the long-lived
+  // branches, whatever is checked out right now, and the most recent handful.
+  const BRANCH_SOURCES = {
+    ticket:     { label: 'My tickets' },
+    mr:         { label: 'Merge requests' },
+    inplay:     { label: 'Checked out now' },
+    structural: { label: 'Main & releases' },
+    recent:     { label: 'Recent' },
+  };
+  const BRANCH_SOURCE_ORDER = ['ticket', 'mr', 'inplay', 'structural', 'recent'];
+  const RECENT_BRANCH_LIMIT = 10;
+
+  /** Looser than ticketKeyOf: used only to match branches against known ticket keys, so a
+   *  false positive is harmless — it simply won't be in jiraSummaries. Catches
+   *  lower-cased branch names, which do occur. */
+  function ticketKeyLoose(branch) {
+    const m = /(?:^|\/)([A-Za-z][A-Za-z0-9]+)-(\d+)/.exec(branch || '');
+    return m ? `${m[1].toUpperCase()}-${m[2]}` : null;
+  }
+
+  function globToRegExp(glob) {
+    const escaped = glob.trim().replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`^${escaped.split('*').join('.*')}$`, 'i');
+  }
+
+  function structuralPatterns() {
+    const raw = (settings.worktrees || {}).structural || 'release/*';
+    return raw.split(/[\n,]/).map(s => s.trim()).filter(Boolean).map(globToRegExp);
+  }
+
+  async function fetchBranches(path) {
+    const resp = await fetch(`/worktree/branches?path=${encodeURIComponent(path)}`);
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || `Could not list branches (${resp.status})`);
+    return data;
+  }
+
+  async function runGitOp(operation, params) {
+    const resp = await fetch('/worktree/git', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ operation, params }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || `${operation} failed (${resp.status})`);
+    return data;
+  }
+
+  function buildBranchCandidates(payload) {
+    const localByName = new Map(payload.local.map(b => [b.name, b]));
+    const baseName = (payload.base || '').replace(/^[^/]+\//, '');
+    const patterns = structuralPatterns();
+    const byName = new Map();
+
+    const add = (name, why, detail) => {
+      const found = byName.get(name);
+      if (found) {
+        if (!found.why.includes(why)) found.why.push(why);
+        if (!found.detail && detail) found.detail = detail;
+        return;
+      }
+      byName.set(name, { name, why: [why], detail: detail || '' });
+    };
+
+    payload.local.forEach(b => {
+      const key = ticketKeyLoose(b.name);
+      if (key && jiraSummaries.has(key)) add(b.name, 'ticket', jiraSummaries.get(key));
+    });
+    mrBranches.forEach((mr, name) => add(name, 'mr', `!${mr.iid} ${mr.title || ''}`));
+    payload.local.forEach(b => { if (b.heldBy) add(b.name, 'inplay', `in ${b.heldBy}`); });
+    payload.local.forEach(b => {
+      if (b.name === baseName || patterns.some(p => p.test(b.name))) add(b.name, 'structural', '');
+    });
+    payload.local.slice(0, RECENT_BRANCH_LIMIT).forEach(b => add(b.name, 'recent', ''));
+
+    byName.forEach(c => {
+      const local = localByName.get(c.name);
+      c.heldBy   = local ? local.heldBy : null;
+      c.heldPath = local ? local.heldPath : null;
+      c.ts       = local ? local.ts : 0;
+      // Not local yet: an MR source branch we would start from the remote
+      c.remote   = local ? null : `origin/${c.name}`;
+    });
+
+    return [...byName.values()].sort((a, b) => {
+      const ra = BRANCH_SOURCE_ORDER.indexOf(a.why[0]);
+      const rb = BRANCH_SOURCE_ORDER.indexOf(b.why[0]);
+      return ra - rb || b.ts - a.ts || a.name.localeCompare(b.name);
+    });
+  }
+
+  /** What would happen if this candidate were applied to this worktree. */
+  function branchPlan(candidate, wt) {
+    if (candidate.heldPath && candidate.heldPath === wt.path) {
+      return { op: null, verb: 'Current', reason: 'Already checked out here' };
+    }
+    if (candidate.heldBy) {
+      return {
+        op: 'move', verb: 'Move here',
+        commands: [
+          `git -C ${candidate.heldPath} switch --detach`,
+          `git -C ${wt.path} switch ${candidate.name}`,
+        ],
+      };
+    }
+    if (candidate.remote) {
+      return {
+        op: 'checkout', verb: 'Check out', note: 'creates a local tracking branch',
+        commands: [`git -C ${wt.path} fetch --prune`,
+                   `git -C ${wt.path} switch --track ${candidate.remote}`],
+      };
+    }
+    return { op: 'checkout', verb: 'Check out',
+             commands: [`git -C ${wt.path} switch ${candidate.name}`] };
+  }
+
+  function agentIdleSeconds(wt) {
+    if (!wt || !wt.claudeAt) return null;
+    return (Date.now() - new Date(wt.claudeAt)) / 1000;
+  }
+
+  /**
+   * Why this worktree must not be touched, or null.
+   *
+   * The server enforces the same rules — this only decides what to disable and what
+   * reason to show, so a button never lies about being available.
+   */
+  function worktreeBlockReason(wt) {
+    if (!wt) return 'No worktree';
+    if (wt.error)  return `${wt.name} cannot be read: ${wt.error}`;
+    if (wt.locked) return `${wt.name} is locked`;
+    const dirty = (wt.dirty || {}).total || 0;
+    if (dirty) {
+      return `${wt.name} has ${dirty} uncommitted change${dirty !== 1 ? 's' : ''} — commit or stash first`;
+    }
+    const idle = agentIdleSeconds(wt);
+    if (idle !== null && idle < 120) {
+      return `Claude was active in ${wt.name} ${Math.round(idle)}s ago`;
+    }
+    return null;
+  }
+
+  function allWorktrees() {
+    if (!worktreeData) return [];
+    return worktreeData.repos.flatMap(r => r.worktrees.filter(w => !w.bare));
+  }
+
+  function repoOf(wt) {
+    if (!worktreeData) return null;
+    return worktreeData.repos.find(r => r.worktrees.some(w => w.path === wt.path)) || null;
+  }
+
+  function mainWorktreeFor(wt) {
+    const repo = repoOf(wt);
+    return repo ? repo.worktrees.find(w => w.isMain) : null;
+  }
+
+  /** Next unused sibling folder name, following the <repo>-worktree-N convention. */
+  function suggestWorktreeName(repo) {
+    const taken = new Set(repo.worktrees.map(w => w.name.toLowerCase()));
+    const first = `${repo.name}-worktree`;
+    if (!taken.has(first.toLowerCase())) return first;
+    for (let n = 2; n < 50; n += 1) {
+      if (!taken.has(`${first}-${n}`.toLowerCase())) return `${first}-${n}`;
+    }
+    return `${first}-new`;
+  }
+
+  /** Branch name a ticket should get, per the hyphenated convention. */
+  function suggestBranchName(key) {
+    const summary = jiraSummaries.get(key) || '';
+    const slug = summary.toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60)
+      .replace(/-+$/, '');
+    return slug ? `${key}-${slug}` : key;
+  }
+
+  // ── Operation modal ───────────────────────────────────────
+  function openOpModal(title) {
+    $id('opTitle').textContent = title;
+    const body = $id('opBody');
+    const footer = $id('opFooter');
+    body.innerHTML = '';
+    footer.innerHTML = '';
+    $id('opModal').classList.remove('hidden');
+    return { body, footer };
+  }
+
+  function closeOpModal() { $id('opModal').classList.add('hidden'); }
+
+  function commandPreview(commands) {
+    const el = document.createElement('div');
+    el.className = 'op-commands';
+    el.innerHTML = commands.map(c => `<div>$ ${esc(c)}</div>`).join('');
+    return el;
+  }
+
+  /** Runs an operation, reporting git's own words on failure. */
+  async function performOp(button, operation, params, done) {
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = '…';
+    try {
+      await runGitOp(operation, params);
+      await loadWorktrees();
+      if (done) done();
+    } catch (err) {
+      window.alert(err?.message || `${operation} failed.`);
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+
+  // ── Branch picker ─────────────────────────────────────────
+  async function openBranchDialog(wt) {
+    const { body, footer } = openOpModal(`Branch in ${wt.name}`);
+    body.innerHTML = `<div class="loading"><div class="spinner"></div><br>Reading branches…</div>`;
+
+    let payload;
+    try {
+      payload = await fetchBranches(wt.path);
+    } catch (err) {
+      body.innerHTML = `<div class="error-state">⚠️ ${esc(err.message)}</div>`;
+      return;
+    }
+
+    const candidates = buildBranchCandidates(payload);
+    const blocked = worktreeBlockReason(wt);
+    const trackedKey = activeEntry ? jiraKeyFromLabel(activeEntry.label) : null;
+
+    body.innerHTML = `
+      ${blocked ? `<div class="op-blocked">⚠️ ${esc(blocked)}</div>` : ''}
+      <input class="form-input" id="branchFilter" spellcheck="false"
+             placeholder="Filter branches…" autocomplete="off">
+      <div class="form-hint">Your tickets, your merge requests, the long-lived branches and
+        the recent handful. Anything else: use the command line.</div>
+      <div class="branch-list" id="branchList"></div>`;
+
+    const filterEl = $id('branchFilter');
+    // Start narrowed to the tracked ticket — usually exactly one branch
+    if (trackedKey) filterEl.value = trackedKey;
+
+    const draw = () => {
+      const needle = filterEl.value.trim().toLowerCase();
+      const shown = candidates.filter(c =>
+        !needle || c.name.toLowerCase().includes(needle) || (c.detail || '').toLowerCase().includes(needle));
+      const list = $id('branchList');
+      list.innerHTML = '';
+
+      if (shown.length === 0) {
+        list.innerHTML = `<div class="report-empty">No matching branch. Clear the filter, or create one.</div>`;
+        return;
+      }
+
+      let group = null;
+      shown.forEach(c => {
+        if (c.why[0] !== group) {
+          group = c.why[0];
+          list.appendChild(divider(BRANCH_SOURCES[group].label));
+        }
+
+        const plan = branchPlan(c, wt);
+        const row = document.createElement('div');
+        row.className = 'branch-row';
+        const tags = c.why.slice(1).map(w =>
+          `<span class="badge badge-gray">${esc(BRANCH_SOURCES[w].label)}</span>`).join('');
+        row.innerHTML = `
+          <div class="branch-main">
+            <div class="branch-name">${esc(c.name)}</div>
+            <div class="branch-detail">
+              ${c.detail ? esc(c.detail) : ''}
+              ${c.heldBy ? `<span class="badge badge-yellow">in ${esc(c.heldBy)}</span>` : ''}
+              ${c.remote ? '<span class="badge badge-purple">remote</span>' : ''}
+              ${tags}
+            </div>
+          </div>`;
+
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-sm' + (plan.op ? ' btn-primary' : '');
+        btn.textContent = plan.verb;
+        const reason = plan.reason || blocked ||
+          (plan.op === 'move' ? worktreeBlockReason(
+            allWorktrees().find(w => w.path === c.heldPath)) : null);
+        if (!plan.op || reason) {
+          btn.disabled = true;
+          btn.title = reason || 'Unavailable';
+        } else {
+          btn.title = plan.commands.join('\n') + (plan.note ? `\n(${plan.note})` : '');
+          btn.addEventListener('click', () => performOp(
+            btn, plan.op,
+            { path: wt.path, branch: c.name, remote: c.remote || undefined },
+            closeOpModal,
+          ));
+        }
+        row.appendChild(btn);
+        list.appendChild(row);
+      });
+    };
+
+    filterEl.addEventListener('input', draw);
+    draw();
+    filterEl.focus();
+    filterEl.select();
+
+    const create = document.createElement('button');
+    create.className = 'btn';
+    create.textContent = '+ New branch…';
+    create.addEventListener('click', () => openCreateBranchDialog(wt, trackedKey));
+
+    const close = document.createElement('button');
+    close.className = 'btn';
+    close.textContent = 'Close';
+    close.addEventListener('click', closeOpModal);
+
+    footer.appendChild(create);
+    footer.appendChild(Object.assign(document.createElement('div'), { style: 'flex:1' }));
+    footer.appendChild(close);
+  }
+
+  // ── Create branch ─────────────────────────────────────────
+  async function openCreateBranchDialog(preferredWt, ticketKey) {
+    const { body, footer } = openOpModal('Create branch');
+    const targets = allWorktrees();
+    if (targets.length === 0) {
+      body.innerHTML = `<div class="config-needed">Add a repository in Settings first.</div>`;
+      return;
+    }
+
+    const start = preferredWt || targets.find(w => !worktreeBlockReason(w) && !w.isMain)
+      || targets.find(w => !worktreeBlockReason(w)) || targets[0];
+
+    body.innerHTML = `
+      <div class="form-group">
+        <label class="form-label" for="cbName">Branch name</label>
+        <input class="form-input" id="cbName" spellcheck="false" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="cbTarget">Worktree</label>
+        <select class="form-input" id="cbTarget"></select>
+        <div class="form-hint" id="cbBlocked"></div>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="cbBase">Base</label>
+        <input class="form-input" id="cbBase" spellcheck="false" placeholder="detected from origin/HEAD">
+        <div class="form-hint">Fetched first, so the branch does not start from a stale base.</div>
+      </div>
+      <div id="cbPreview"></div>`;
+
+    $id('cbName').value = ticketKey ? suggestBranchName(ticketKey) : '';
+
+    const select = $id('cbTarget');
+    targets.forEach(w => {
+      const reason = worktreeBlockReason(w);
+      const opt = document.createElement('option');
+      opt.value = w.path;
+      opt.textContent = `${w.name}${w.isMain ? ' (main)' : ''}${reason ? ' — unavailable' : ''}`;
+      opt.disabled = !!reason;
+      select.appendChild(opt);
+    });
+    select.value = start.path;
+
+    const go = document.createElement('button');
+    go.className = 'btn btn-primary';
+    go.textContent = 'Fetch & create';
+
+    const refresh = async () => {
+      const wt = targets.find(w => w.path === select.value);
+      const reason = wt ? worktreeBlockReason(wt) : 'Pick a worktree';
+      $id('cbBlocked').textContent = reason || '';
+      $id('cbBlocked').className = reason ? 'form-hint op-blocked-hint' : 'form-hint';
+
+      if (!$id('cbBase').value && wt) {
+        try { $id('cbBase').value = (await fetchBranches(wt.path)).base || ''; } catch { /* left blank */ }
+      }
+      const name = $id('cbName').value.trim() || '<name>';
+      const base = $id('cbBase').value.trim() || 'origin/HEAD';
+      $id('cbPreview').innerHTML = '';
+      $id('cbPreview').appendChild(commandPreview([
+        `git -C ${wt ? wt.path : '<worktree>'} fetch --prune`,
+        `git -C ${wt ? wt.path : '<worktree>'} switch -c ${name} --no-track ${base}`,
+      ]));
+      go.disabled = !!reason || !$id('cbName').value.trim();
+    };
+
+    select.addEventListener('change', refresh);
+    $id('cbName').addEventListener('input', refresh);
+    $id('cbBase').addEventListener('input', refresh);
+
+    go.addEventListener('click', () => performOp(go, 'create', {
+      path: select.value,
+      name: $id('cbName').value.trim(),
+      base: $id('cbBase').value.trim() || undefined,
+    }, closeOpModal));
+
+    const close = document.createElement('button');
+    close.className = 'btn';
+    close.textContent = 'Cancel';
+    close.addEventListener('click', closeOpModal);
+
+    footer.appendChild(close);
+    footer.appendChild(Object.assign(document.createElement('div'), { style: 'flex:1' }));
+    footer.appendChild(go);
+    await refresh();
+    $id('cbName').focus();
+  }
+
+  // ── Add worktree ──────────────────────────────────────────
+  function openAddWorktreeDialog(repo) {
+    const { body, footer } = openOpModal(`New worktree in ${repo.name}`);
+    const anchor = repo.worktrees.find(w => w.isMain) || repo.worktrees[0];
+
+    body.innerHTML = `
+      <div class="form-group">
+        <label class="form-label" for="awName">Folder name</label>
+        <input class="form-input" id="awName" spellcheck="false" autocomplete="off">
+        <div class="form-hint">Created beside the main checkout. A plain name, no path separators.</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="awBranch">New branch (optional)</label>
+        <input class="form-input" id="awBranch" spellcheck="false" autocomplete="off"
+               placeholder="leave empty for a detached worktree">
+        <div class="form-hint">Empty gives you an idle worktree to check something out into later.</div>
+      </div>
+      <div id="awPreview"></div>`;
+
+    $id('awName').value = suggestWorktreeName(repo);
+
+    const go = document.createElement('button');
+    go.className = 'btn btn-primary';
+    go.textContent = 'Create worktree';
+
+    const refresh = () => {
+      const name = $id('awName').value.trim() || '<folder>';
+      const branch = $id('awBranch').value.trim();
+      $id('awPreview').innerHTML = '';
+      $id('awPreview').appendChild(commandPreview([
+        branch
+          ? `git -C ${repo.main} worktree add -b ${branch} …/${name} <base>`
+          : `git -C ${repo.main} worktree add --detach …/${name}`,
+      ]));
+      go.disabled = !$id('awName').value.trim();
+    };
+    $id('awName').addEventListener('input', refresh);
+    $id('awBranch').addEventListener('input', refresh);
+
+    go.addEventListener('click', () => performOp(go, 'worktree-add', {
+      path: anchor.path,
+      name: $id('awName').value.trim(),
+      newBranch: $id('awBranch').value.trim() || undefined,
+    }, closeOpModal));
+
+    const close = document.createElement('button');
+    close.className = 'btn';
+    close.textContent = 'Cancel';
+    close.addEventListener('click', closeOpModal);
+
+    footer.appendChild(close);
+    footer.appendChild(Object.assign(document.createElement('div'), { style: 'flex:1' }));
+    footer.appendChild(go);
+    refresh();
+  }
+
   // ── Contextual actions ────────────────────────────────────
   // One registry drives two surfaces: the tracker bar, acting on whatever is being
   // tracked, and each worktree row, acting on that worktree. Actions are deliberately not
@@ -2166,6 +2685,47 @@ async function fetchEpicChildren(epicKey) {
         const base = settings.jira.url.replace(/\/+$/, '');
         window.open(`${base}/browse/${encodeURIComponent(ctx.jiraKey)}`, '_blank', 'noopener');
       },
+    },
+    {
+      id: 'createBranch', icon: '+⎇', label: 'Create branch',
+      title: 'Create a branch for this ticket in a worktree',
+      surfaces: ['tracker'],
+      // The primary workflow: a ticket exists, no branch does yet
+      applies: ctx => !!ctx.jiraKey && !ctx.worktree,
+      run: ctx => openCreateBranchDialog(null, ctx.jiraKey),
+    },
+    {
+      id: 'moveToMain', icon: '⇥', label: 'Move to main',
+      title: 'Move this branch into the main checkout',
+      surfaces: ['tracker'],
+      applies: ctx => {
+        if (!ctx.worktree || ctx.worktree.isMain) return false;
+        const main = mainWorktreeFor(ctx.worktree);
+        if (!main) return false;
+        return worktreeBlockReason(main) || worktreeBlockReason(ctx.worktree) || true;
+      },
+      run: ctx => runGitOp('move', {
+        path: mainWorktreeFor(ctx.worktree).path,
+        branch: ctx.worktree.branch,
+      }).then(loadWorktrees),
+    },
+    {
+      id: 'branches', icon: '⎇', label: 'Branch…',
+      title: 'Check out, move or create a branch here',
+      surfaces: ['worktree'],
+      applies: ctx => !!ctx.worktree && !ctx.worktree.bare,
+      run: ctx => openBranchDialog(ctx.worktree),
+    },
+    {
+      id: 'detach', icon: '⏏', label: 'Release',
+      title: 'Detach this worktree, freeing its branch for use elsewhere',
+      surfaces: ['worktree'],
+      applies: ctx => {
+        const wt = ctx.worktree;
+        if (!wt || wt.bare || wt.detached) return false;
+        return worktreeBlockReason(wt) || true;
+      },
+      run: ctx => runGitOp('detach', { path: ctx.worktree.path }).then(loadWorktrees),
     },
     {
       id: 'explorer', icon: '📁', label: 'Explorer',
@@ -2615,6 +3175,7 @@ async function fetchEpicChildren(epicKey) {
     $id('s-pomo-notification').value   = (settings.pomo || {}).notification || 'browser';
     $id('s-wt-roots').value            = ((settings.worktrees || {}).roots || []).join('\n');
     $id('s-wt-scan').value             = (settings.worktrees || {}).scanParent || '';
+    $id('s-wt-structural').value       = (settings.worktrees || {}).structural || 'release/*';
     updatePomoPermissionUI();
     $id('settingsModal').classList.remove('hidden');
   }
@@ -2645,6 +3206,7 @@ async function fetchEpicChildren(epicKey) {
       worktrees: {
         roots:      parseRoots($id('s-wt-roots').value),
         scanParent: $id('s-wt-scan').value.trim().replace(/\\/g, '/'),
+        structural: $id('s-wt-structural').value.trim(),
       },
     };
   }
@@ -2690,6 +3252,11 @@ async function fetchEpicChildren(epicKey) {
     loadGitLab();
     loadEpicPanel();
     loadWorktrees();
+  });
+
+  $id('closeOp').addEventListener('click', closeOpModal);
+  $id('opModal').addEventListener('click', e => {
+    if (e.target === $id('opModal')) closeOpModal();
   });
 
   $id('s-wt-scan-btn').addEventListener('click', scanForRepos);
@@ -2778,7 +3345,7 @@ async function fetchEpicChildren(epicKey) {
 
   // Escape closes modal
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { closeSettings(); closeOtherWork(); closeTimeReport(); }
+    if (e.key === 'Escape') { closeSettings(); closeOtherWork(); closeTimeReport(); closeOpModal(); }
   });
 
   // ── Init ──────────────────────────────────────────────────

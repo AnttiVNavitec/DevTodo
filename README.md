@@ -52,7 +52,17 @@ The worktree currently holding the running timer is marked, and it is matched by
 
 The tracker bar carries the actions that apply to whatever you are currently tracking, and each worktree row carries the ones that apply to it. Tracking a ticket gets you a Jira link and a Markdown download of the ticket; if that ticket's branch is checked out somewhere, you also get one-click File Explorer, Git Bash, VS Code and Claude Code in that exact directory — which is the whole point when four worktrees are in play and you have lost track of which folder is which.
 
-Actions that cannot apply are left out rather than shown broken, and ones that are merely unavailable say why when you hover them. They are not all program launchers: the list is a registry, so checking a branch out in an idle worktree, or creating one that doesn't exist yet, will appear in the same place as the tools do.
+Actions that cannot apply are left out rather than shown broken, and ones that are merely unavailable say why when you hover them.
+
+### Branches and worktrees
+
+The main workflow is meant to be: a ticket exists, so make a branch for it and start. Tracking a ticket that has no branch anywhere gets you a **Create branch** action — name pre-filled from the ticket key and summary, base detected from the repository's own `origin/HEAD`, and a fetch first so you don't branch from a stale base. Pick which worktree it lands in; ones that are busy are listed but not selectable, with the reason shown.
+
+Each worktree row has a **Branch…** picker. It does not list every branch — there are hundreds and the command line is there for the rest. It lists what the dashboard knows is relevant: branches for your assigned tickets, branches behind merge requests you're involved in, whatever is checked out right now, the long-lived branches, and the ten most recent. The filter box starts narrowed to the ticket you're tracking, which usually leaves exactly one row. Branches that exist only on the remote — typically someone's merge request you've been asked to review — are offered too, and checking one out creates the local tracking branch for you.
+
+Because git refuses to check the same branch out twice, a branch held by another worktree offers **Move here** instead, which detaches the holder and checks it out where you asked. Getting a branch into the main checkout, which some tooling insists on, is a single click from the tracker bar. There is also **Release** to detach a worktree and free its branch, and per-repository buttons to add a worktree beside the main checkout or prune ones whose folders are gone.
+
+Every one of these refuses to touch a worktree with uncommitted changes, or one where Claude was active in the last couple of minutes — pulling a branch out from under a running agent produces confident nonsense. Dialogs show the exact git commands before running them, and when git objects you get its own words, not a paraphrase. Merging, rebasing and pushing are deliberately absent: those belong in a terminal.
 
 ## Forgetting to clock in
 

@@ -9,9 +9,12 @@ upstream divergence and last commit.
 Nothing here is repo- or project-specific: roots come from the caller.
 """
 import concurrent.futures
+import datetime
 import os
 import subprocess
 import time
+
+import transcripts
 
 GIT_TIMEOUT = 20
 CACHE_TTL = 3.0
@@ -41,6 +44,14 @@ def _git(cwd, *args):
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, '', str(exc)
     return proc.returncode == 0, proc.stdout, (proc.stderr or '').strip()
+
+
+def _iso(epoch):
+    """Epoch seconds → UTC ISO string, matching what the rest of the app stores."""
+    if not epoch:
+        return None
+    return (datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc)
+            .isoformat(timespec='seconds').replace('+00:00', 'Z'))
 
 
 def path_key(path):
@@ -193,12 +204,15 @@ def _collect_repo(root):
     }, None
 
 
-def list_worktrees(roots):
+def list_worktrees(roots, fresh=False):
     """
     Discover worktrees for every configured root.
 
     Returns {'repos': [...], 'errors': [...], 'cached': bool}. Repos are deduplicated
     by main-worktree path, so listing both a repo and one of its worktrees is harmless.
+
+    `fresh=True` bypasses the read cache — required before acting on a guard, since a
+    three-second-old dirty count is not something to change branches on.
     """
     global _cache
 
@@ -206,7 +220,7 @@ def list_worktrees(roots):
     cache_key = tuple(path_key(r) for r in roots)
     now = time.monotonic()
 
-    snapshot = _cache
+    snapshot = None if fresh else _cache
     if snapshot is not None:
         key, ts, cached = snapshot
         if key == cache_key and now - ts < CACHE_TTL:
@@ -233,11 +247,15 @@ def list_worktrees(roots):
         with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_PARALLEL) as pool:
             details = list(pool.map(_describe, [rec for _, rec in flat]))
 
+        # One scan of the transcript directory covers every worktree at once
+        claude = transcripts.claude_activity([rec.get('path', '') for _, rec in flat])
+
         for repo in repos:
             repo['worktrees'] = []
         for (repo, _), wt in zip(flat, details):
             wt['isMain'] = path_key(wt['path']) == path_key(repo['main'])
             wt['repo'] = repo['name']
+            wt['claudeAt'] = _iso(claude.get(wt['path']))
             repo['worktrees'].append(wt)
         for repo in repos:
             repo.pop('records', None)

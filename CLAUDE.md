@@ -5,6 +5,7 @@
 Jira/GitLab calls are proxied through the server: `/proxy/jira/*`, `/proxy/gitlab/*`
 Git worktree state comes from the server too: `/worktrees`, `/worktrees/scan`, `/activity`
 Tool launching: `POST /worktree/open` `{tool, path}`
+Branch ops: `GET /worktree/branches?path=`, `POST /worktree/git` `{operation, params}`
 
 ## File layout
 - `index.html` — all HTML + all JS in one IIFE (no build step, no modules)
@@ -15,6 +16,9 @@ Tool launching: `POST /worktree/open` `{tool, path}`
 - `worktrees.py` — git worktree discovery (shells out to git, no repo-specific knowledge)
 - `activity.py` — background poller that logs worktree activity signals to `data/`
 - `spawn.py` — launches external tools (Explorer, Git Bash, VS Code, Claude…) in a worktree
+- `gitops.py` — mutating git operations with server-enforced guards
+- `transcripts.py` — Claude-transcript probe; a leaf module so worktrees.py and activity.py
+  can both use it without importing each other
 - `PLAN-worktrees.md` — phased plan for the worktree / auto-time-tracking work
 - `data/` — gitignored. Activity log + remembered repo paths. **Real work data: never commit.**
 
@@ -41,6 +45,7 @@ Grep for `// ── <name>` to jump directly. Sections in order:
 | `Local Todos` | `renderTodos`, `addTodo` |
 | `Worktrees` | `ticketKeyOf`, `fmtAgo`, `worktreeLabel`/`worktreeLabelSync`, `isWorktreeActive`, `buildWorktreeItem`, `renderWorktrees`, `loadWorktrees`, `scanForRepos`, `parseRoots` |
 | `Nudges & gaps` | `trackWorktreeChanges`, `pendingNudges`, `renderNudges`, `loadActivity`, `findGaps`, `subtractCovered`, `mergedCoverage`, `acceptGap`, `renderReportGaps` |
+| `Branch operations` | `buildBranchCandidates`, `branchPlan`, `worktreeBlockReason`, `openBranchDialog`, `openCreateBranchDialog`, `openAddWorktreeDialog`, `runGitOp`, `performOp` |
 | `Contextual actions` | `ACTIONS` registry, `openWorktreeTool`, `trackedContext`, `worktreeContext`, `findTrackedWorktree`, `renderContextActions` |
 | `Settings Modal` | `openSettings`, `closeSettings`, `collectSettings` |
 | `Event wiring` | All `addEventListener` calls |
@@ -158,6 +163,39 @@ that matter, all learned from running it against real data:
 Both `days` bucketing and coverage use `ts.slice(0, 10)`, i.e. **UTC** days, matching
 `entriesForDate()` and `todayStr()`. That's a pre-existing app-wide quirk; the gap finder
 matches it on purpose so gaps and entries line up.
+
+## Branch operations
+`gitops.py` holds a fixed operation table (`checkout`, `create`, `move`, `detach`,
+`worktree-add`, `prune`, `fetch`). Same shape as `spawn.py`: the client names an operation,
+never a command line. **Guards are enforced server-side** — the UI's disabled buttons are
+only an affordance. `worktreeBlockReason()` mirrors them client-side so a button never
+lies about being available.
+
+Things that must not regress:
+
+- **`_holder_of` is scoped to the repo.** The same ticket routinely has a same-named branch
+  in several repos; an unscoped lookup reported a *foreign* repo's worktree as the holder,
+  and a move would then have detached something unrelated.
+- **`move` rolls back.** If the second step fails, the holder is put back, so a failure
+  never leaves a branch checked out nowhere.
+- **`create` uses `--no-track`.** Branching from `origin/<base>` with git's default sets
+  upstream to the base, pointing a later `git push` at the shared branch.
+- **The base branch is detected from `origin/HEAD`, never hardcoded** — one repo here uses
+  `origin/Develop` and another `origin/develop`.
+- `check-ref-format --branch` validates names; `worktree-add` takes a plain folder name
+  joined to the main checkout's parent, so a path cannot escape.
+
+### The branch picker
+Deliberately does **not** offer every branch — hundreds exist and the command line is the
+escape hatch. Candidates are a union of five sources, each labelled with why it is there:
+my Jira tickets (`jiraSummaries`), my merge requests (`mrBranches`, from
+`mr.source_branch`), whatever is checked out now, long-lived branches (settings glob,
+default `release/*`), and the 10 most recent. That is ~13–17 rows out of 110. The filter
+box pre-fills with the tracked ticket key, which usually narrows to one.
+
+`ticketKeyLoose()` matches branches case-insensitively — unlike `ticketKeyOf()`, which
+gates labels. A false positive here is harmless (it just won't be in `jiraSummaries`),
+and real branches are sometimes lower-cased.
 
 ## Conventions
 - XSS: always wrap user/external strings with `esc()` before innerHTML
