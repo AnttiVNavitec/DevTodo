@@ -10,6 +10,8 @@ Endpoints proxied:
   GET /proxy/gitlab/<path>?<query> — forwards to GitLab with X-Gitlab-Token / X-Gitlab-Base headers
   GET /jira/ticket.md?key=<key>    — downloads a Jira ticket as a Markdown wiki page
   GET /gitlab/mr-comments.md       — downloads open GitLab MR review comments as Markdown
+  GET /worktrees?root=<p>&root=... — git worktree status for the given repo roots
+  GET /worktrees/scan?parent=<p>   — subdirectories of <p> that look like git checkouts
 """
 import http.server
 import urllib.request
@@ -23,6 +25,7 @@ import sys
 
 from fetch_mr_comments import build_markdown, get_file_context, paginate, api_get
 import jira_downloader
+import worktrees
 
 PORT = 8080
 BIND = "127.0.0.1"
@@ -67,6 +70,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._download_gitlab_mr_comments(parsed)
         elif path == '/jira/ticket.md':
             self._download_jira_ticket(parsed)
+        elif path == '/worktrees':
+            self._list_worktrees(parsed)
+        elif path == '/worktrees/scan':
+            self._scan_repos(parsed)
         elif path.startswith('/proxy/jira/'):
             self._proxy_jira(parsed)
         elif path.startswith('/proxy/gitlab/'):
@@ -295,6 +302,30 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         except Exception as exc:
             self._json_error(502, str(exc))
 
+    # ── Worktrees ─────────────────────────────────────────────────────────────
+    def _list_worktrees(self, parsed):
+        if not self._check_origin():
+            return
+
+        roots = urllib.parse.parse_qs(parsed.query).get('root') or []
+        try:
+            self._json_ok(worktrees.list_worktrees(roots))
+        except Exception as exc:
+            self._json_error(500, str(exc))
+
+    def _scan_repos(self, parsed):
+        if not self._check_origin():
+            return
+
+        parent = (urllib.parse.parse_qs(parsed.query).get('parent') or [''])[0].strip()
+        if not parent:
+            self._json_error(400, 'Missing required query parameter: parent')
+            return
+        try:
+            self._json_ok({'repos': worktrees.scan_for_repos(parent)})
+        except Exception as exc:
+            self._json_error(500, str(exc))
+
     # ── HTTP forwarding ───────────────────────────────────────────────────────
     def _forward(self, url, headers, method='GET', body=None):
         # Allow self-signed certs on internal instances (GitLab on-prem etc.)
@@ -344,6 +375,15 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Headers',
                          'X-Jira-Auth, X-Jira-Base, X-Gitlab-Token, X-Gitlab-Base, Content-Type')
 
+    def _json_ok(self, payload):
+        body = json.dumps(payload).encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', f'http://{BIND}:{PORT}')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _json_error(self, code, message):
         body = json.dumps({'error': message}).encode()
         self.send_response(code)
@@ -362,7 +402,8 @@ if __name__ == '__main__':
     # Always run from the directory that contains index.html
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-    server = http.server.HTTPServer((BIND, PORT), ProxyHandler)
+    # Threaded: a worktree scan shells out to git and must not block the dashboard
+    server = http.server.ThreadingHTTPServer((BIND, PORT), ProxyHandler)
     url = f'http://localhost:{PORT}'
     print(f'DevTodo  →  {url}')
     print('Press Ctrl+C to stop.\n')

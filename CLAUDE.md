@@ -3,14 +3,18 @@
 ## Run
 `serve.bat` → `http://localhost:8080` (Python server in `server.py`)
 Jira/GitLab calls are proxied through the server: `/proxy/jira/*`, `/proxy/gitlab/*`
+Git worktree state comes from the server too: `/worktrees`, `/worktrees/scan`
 
 ## File layout
 - `index.html` — all HTML + all JS in one IIFE (no build step, no modules)
 - `styles.css` — all CSS, separate file
-- `server.py` — local proxy server + GitLab MR comment export endpoint
+- `server.py` — local proxy server, routing only for anything non-trivial
 - `fetch_mr_comments.py` — helper called by server.py
+- `jira_downloader.py` — helper called by server.py
+- `worktrees.py` — git worktree discovery (shells out to git, no repo-specific knowledge)
+- `PLAN-worktrees.md` — phased plan for the worktree / auto-time-tracking work
 
-**Do not split into modules.** The JS is a single IIFE; all state is shared via closure. Splitting would require globals or ES modules and isn't worth it at the current size.
+**Do not split the JS into modules.** The JS is a single IIFE; all state is shared via closure. Splitting would require globals or ES modules and isn't worth it at the current size. Python *is* split into modules — `server.py` stays a router.
 
 ## JS sections in index.html
 Grep for `// ── <name>` to jump directly. Sections in order:
@@ -31,16 +35,17 @@ Grep for `// ── <name>` to jump directly. Sections in order:
 | `GitLab` | `fetchGitLabMRs`, `buildGitLabItem`, `downloadMrComments`, `loadGitLab` |
 | `MR ranking` | `mrRank` |
 | `Local Todos` | `renderTodos`, `addTodo` |
+| `Worktrees` | `ticketKeyOf`, `fmtAgo`, `buildWorktreeItem`, `loadWorktrees`, `scanForRepos`, `parseRoots` |
 | `Settings Modal` | `openSettings`, `closeSettings`, `collectSettings` |
 | `Event wiring` | All `addEventListener` calls |
 | `Init` | Startup sequence |
 
 ## CSS sections in styles.css
-Same pattern, grep for `/* ── <name>`. Key sections: `Pomodoro bar`, `Tracker bar`, `Time report`, `Summary view`, `Day stats in time report`.
+Same pattern, grep for `/* ── <name>`. Key sections: `Pomodoro bar`, `Tracker bar`, `Time report`, `Summary view`, `Day stats in time report`, `Worktrees`.
 
 ## Key shared state vars
 ```
-settings          loaded from localStorage, shape: { jira: {...}, gitlab: {...} }
+settings          loaded from localStorage, shape: { jira, gitlab, pomo, worktrees }
 activeEntry       null | { id, label, type, startedAt, endedAt:null } — the running timer
 timeEntries       completed entries array
 timeSuggestions   autocomplete history for "Other work"
@@ -64,3 +69,8 @@ summarySelection  Set<label> of checked rows in summary view
 - Context switch = `clockIn` called with a different label than `activeEntry.label`
 - Entries older than 14 days are pruned on startup (`pruneOldEntries`)
 - The 1-second interval calls both `renderTracker()` and `renderPomo()`
+- The worktree panel polls every 10s while the tab is visible. Its render order is fixed
+  (repo name → main checkout first → worktree name) so a refresh never moves an item
+  under the cursor.
+- **Nothing repo-, product- or employer-specific in the code.** This repo is public.
+  Repo paths, project keys and base branches are settings, never constants.

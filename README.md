@@ -36,6 +36,14 @@ The time tracker supports easy selection of any of the existing tasks to be work
 - The summary allows you to easily add up certain items to the same total by checking the checkboxes next to the work items
 - You can easily copy the summary lines one by one or all the checked ones or all the lines by clicking buttons. No need to paint anything
 
+## Worktrees
+
+If you work in several git worktrees in parallel — one agent or one feature per worktree — the worktree panel shows what each of them is doing without you having to visit them. List your repository paths in Settings → Worktrees (or point the scanner at the folder that contains them) and every worktree of every listed repo is discovered automatically; listing one worktree of a repo is enough to find the rest.
+
+Each worktree shows its branch, the ticket key parsed out of the branch name, whether the working tree is clean or dirty (hover the badge for the breakdown), how far it has drifted from its upstream, and the subject and age of its last commit. The main checkout is marked, because some things have to be done there rather than in a worktree. Detached heads, locked and prunable worktrees are called out.
+
+The panel refreshes itself every 10 seconds while the tab is visible. The order is fixed — repository, then the main checkout, then the other worktrees by name — so a refresh never shuffles a row out from under your cursor.
+
 ## Pomodoro timer
 The tool now has integrated pomodoro timer. The timer will keep stats on how many succesful and interrupted pomodoro periods you have logged. The tool also keeps a counter of context switches you have had today (switching between two different tasks).
 

@@ -152,6 +152,28 @@
         <div class="empty">No epic selected</div>
       </div>
     </div>
+
+    <!-- ── Worktrees ── -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title">
+          <div class="section-icon worktree">⎇</div>
+          Worktrees
+          <span class="section-count" id="worktreeCount">–</span>
+        </div>
+        <button class="btn btn-sm btn-icon" id="refreshWorktrees" title="Refresh worktrees">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
+            <path d="M21 3v5h-5"/>
+            <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>
+            <path d="M8 16H3v5"/>
+          </svg>
+        </button>
+      </div>
+      <div id="worktreeBody" class="section-body">
+        <div class="config-needed">⚙️ Add repository paths in Settings<p>Every worktree of each repo is discovered automatically.</p></div>
+      </div>
+    </div>
   </div>
 </main>
 
@@ -170,6 +192,7 @@
         <button class="modal-tab active" data-tab="jira">Jira</button>
         <button class="modal-tab" data-tab="gitlab">GitLab</button>
         <button class="modal-tab" data-tab="pomo">Pomodoro</button>
+        <button class="modal-tab" data-tab="worktrees">Worktrees</button>
       </div>
 
       <!-- Jira tab -->
@@ -248,6 +271,27 @@
           <button class="btn" id="pomo-request-permission" style="margin-top:6px">Grant browser notification permission</button>
         </div>
       </div>
+
+      <!-- Worktrees tab -->
+      <div class="tab-content" id="tab-worktrees">
+        <div class="form-group">
+          <label class="form-label" for="s-wt-roots">Repository paths</label>
+          <textarea class="form-input" id="s-wt-roots" rows="6" spellcheck="false"
+                    placeholder="C:/work/my-repo&#10;C:/work/other-repo"></textarea>
+          <div class="form-hint">One path per line. Any worktree of a repo finds all the others, so listing the main checkout is enough.</div>
+        </div>
+        <div class="form-section">
+          <div class="form-section-title">Find repositories</div>
+          <div class="form-group">
+            <label class="form-label" for="s-wt-scan">Parent folder</label>
+            <div style="display:flex; gap:6px">
+              <input class="form-input" id="s-wt-scan" spellcheck="false" placeholder="C:/work">
+              <button class="btn" id="s-wt-scan-btn">Scan</button>
+            </div>
+            <div class="form-hint" id="s-wt-scan-status">Adds every git checkout directly inside that folder to the list above.</div>
+          </div>
+        </div>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn" id="cancelSettings">Cancel</button>
@@ -320,6 +364,7 @@
     jira:   { url: '', email: '', token: '', supportProject: '', supportStatus: 'To Do', supportComponent: '' },
     gitlab: { url: 'https://gitlab.com', username: '', token: '' },
     pomo:   { notification: 'browser' },
+    worktrees: { roots: [], scanParent: '' },
   };
 
   // ── State ─────────────────────────────────────────────────
@@ -348,6 +393,8 @@
       return {
         jira:   { ...deepClone(DEFAULT.jira),   ...parsed.jira   },
         gitlab: { ...deepClone(DEFAULT.gitlab), ...parsed.gitlab },
+        pomo:   { ...deepClone(DEFAULT.pomo),   ...parsed.pomo   },
+        worktrees: { ...deepClone(DEFAULT.worktrees), ...parsed.worktrees },
       };
     } catch { return deepClone(DEFAULT); }
   }
@@ -446,10 +493,12 @@
     const end  = new Date(activeSprint.endDate);
     const days = Math.round((midnight(end) - midnight(new Date())) / 86400000);
 
+    // A weekday name only reads unambiguously inside the coming week
     let text;
-    if (days < 0)       text = 'sprint overdue';
+    if (days < 0)        text = 'sprint overdue';
     else if (days === 0) text = 'sprint ends today';
-    else                 text = `sprint ends ${end.toLocaleDateString(undefined, { weekday: 'short' })}`;
+    else if (days < 7)   text = `sprint ends ${end.toLocaleDateString(undefined, { weekday: 'short' })}`;
+    else                 text = `sprint ends ${end.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
 
     el.textContent = ` · ${text}`;
     el.className = days <= 1 ? 'sprint-info sprint-info-soon' : 'sprint-info';
@@ -1805,6 +1854,176 @@ async function fetchEpicChildren(epicKey) {
     return true;
   }
 
+  // ── Worktrees ─────────────────────────────────────────────
+  /** Ticket keys lead the branch name (or the segment after a `feature/`-style prefix).
+   *  Requiring uppercase and a 2+ character project key keeps ordinary branch names like
+   *  `release-2` from reading as tickets. */
+  function ticketKeyOf(branch) {
+    const m = /(?:^|\/)([A-Z][A-Z0-9]+)-(\d+)/.exec(branch || '');
+    return m ? `${m[1]}-${m[2]}` : null;
+  }
+
+  function fmtAgo(unixSeconds) {
+    if (!unixSeconds) return '';
+    const mins = Math.floor((Date.now() / 1000 - unixSeconds) / 60);
+    if (mins < 1)  return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return days === 1 ? 'yesterday' : `${days}d ago`;
+  }
+
+  function buildWorktreeItem(wt) {
+    const el = document.createElement('div');
+    el.className = 'item worktree-item';
+
+    const ticket = ticketKeyOf(wt.branch);
+    const dirty  = wt.dirty || {};
+    const badges = [];
+
+    if (wt.isMain) badges.push('<span class="badge badge-gray" title="Main checkout — some work has to happen here">Main</span>');
+    if (ticket)    badges.push(`<span class="badge badge-blue">${esc(ticket)}</span>`);
+
+    if (dirty.total > 0) {
+      const parts = [];
+      if (dirty.staged)     parts.push(`${dirty.staged} staged`);
+      if (dirty.unstaged)   parts.push(`${dirty.unstaged} modified`);
+      if (dirty.untracked)  parts.push(`${dirty.untracked} untracked`);
+      if (dirty.conflicted) parts.push(`${dirty.conflicted} conflicted`);
+      badges.push(`<span class="badge badge-yellow" title="${esc(parts.join(', '))}">${dirty.total} dirty</span>`);
+    } else if (!wt.error && wt.dirty) {
+      badges.push('<span class="badge badge-green">Clean</span>');
+    }
+
+    if (dirty.ahead)  badges.push(`<span class="badge badge-purple" title="Unpushed commits">↑${dirty.ahead}</span>`);
+    if (dirty.behind) badges.push(`<span class="badge badge-purple" title="Commits on upstream not here">↓${dirty.behind}</span>`);
+    if (wt.dirty && !dirty.upstream && !wt.detached) {
+      badges.push('<span class="badge badge-gray" title="Branch has no upstream">No remote</span>');
+    }
+    if (wt.locked)   badges.push(`<span class="badge badge-red" title="${esc(wt.lockedReason || 'locked')}">Locked</span>`);
+    if (wt.prunable) badges.push(`<span class="badge badge-red" title="${esc(wt.prunableReason || 'prunable')}">Prunable</span>`);
+
+    const title = wt.detached
+      ? `detached at ${(wt.head || '').slice(0, 8)}`
+      : (wt.branch || '(no branch)');
+
+    const commit = wt.lastCommit
+      ? `<div class="worktree-commit" title="${esc(wt.lastCommit.subject)}">${esc(fmtAgo(wt.lastCommit.ts))} · ${esc(wt.lastCommit.subject)}</div>`
+      : '';
+
+    const error = wt.error
+      ? `<div class="worktree-error">⚠️ ${esc(wt.error)}</div>`
+      : '';
+
+    el.innerHTML = `
+      <div class="item-icon">${wt.detached ? '⚠' : '⎇'}</div>
+      <div class="item-content">
+        <div class="item-title" title="${esc(wt.branch || wt.head || '')}">${esc(title)}</div>
+        <div class="item-meta">
+          <span class="item-key" title="${esc(wt.path)}">${esc(wt.name)}</span>
+          ${badges.join('')}
+        </div>
+        ${commit}
+        ${error}
+      </div>`;
+    return el;
+  }
+
+  async function loadWorktrees() {
+    const body    = $id('worktreeBody');
+    const countEl = $id('worktreeCount');
+    const roots   = (settings.worktrees || {}).roots || [];
+
+    if (location.protocol === 'file:') {
+      body.innerHTML = `<div class="error-state">⚠️ <strong>Open via a local web server, not directly from disk.</strong></div>`;
+      countEl.textContent = '!';
+      return;
+    }
+
+    if (roots.length === 0) {
+      body.innerHTML = `<div class="config-needed">⚙️ Add repository paths in Settings<p>Every worktree of each repo is discovered automatically.</p></div>`;
+      countEl.textContent = '–';
+      return;
+    }
+
+    const params = new URLSearchParams();
+    roots.forEach(r => params.append('root', r));
+
+    try {
+      const resp = await fetch(`/worktrees?${params.toString()}`);
+      if (!resp.ok) {
+        const payload = await resp.json().catch(() => ({}));
+        throw new Error(payload.error || `Worktree scan failed (${resp.status})`);
+      }
+      const data = await resp.json();
+
+      body.innerHTML = '';
+      let total = 0;
+
+      // Deterministic order — the panel re-renders every few seconds and nothing
+      // should move under the cursor just because a file changed.
+      data.repos.forEach(repo => {
+        const sorted = [...repo.worktrees].sort((a, b) => {
+          if (a.isMain !== b.isMain) return a.isMain ? -1 : 1;
+          return a.name.localeCompare(b.name);
+        });
+        body.appendChild(divider(`${repo.name} (${sorted.length})`));
+        sorted.forEach(wt => { body.appendChild(buildWorktreeItem(wt)); total += 1; });
+      });
+
+      (data.errors || []).forEach(e => {
+        const el = document.createElement('div');
+        el.className = 'item worktree-item';
+        el.innerHTML = `
+          <div class="item-icon">⚠️</div>
+          <div class="item-content">
+            <div class="item-title" title="${esc(e.root)}">${esc(e.root)}</div>
+            <div class="worktree-error">${esc(e.error)}</div>
+          </div>`;
+        body.appendChild(el);
+      });
+
+      if (total === 0 && (data.errors || []).length === 0) {
+        body.innerHTML = `<div class="empty"><span class="empty-icon">⎇</span>No worktrees found.</div>`;
+      }
+      countEl.textContent = total;
+    } catch (err) {
+      body.innerHTML = `<div class="error-state">⚠️ ${esc(err.message)}</div>`;
+      countEl.textContent = '!';
+    }
+  }
+
+  async function scanForRepos() {
+    const statusEl = $id('s-wt-scan-status');
+    const parent   = $id('s-wt-scan').value.trim();
+    if (!parent) return;
+
+    statusEl.textContent = 'Scanning…';
+    try {
+      const resp = await fetch(`/worktrees/scan?parent=${encodeURIComponent(parent)}`);
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || `Scan failed (${resp.status})`);
+
+      const area    = $id('s-wt-roots');
+      const existing = new Set(parseRoots(area.value).map(r => r.toLowerCase()));
+      const added   = data.repos.filter(r => !existing.has(r.toLowerCase()));
+
+      if (added.length) {
+        area.value = [...parseRoots(area.value), ...added].join('\n');
+      }
+      statusEl.textContent = added.length
+        ? `Added ${added.length} repositor${added.length === 1 ? 'y' : 'ies'}.`
+        : `Found ${data.repos.length}, all already listed.`;
+    } catch (err) {
+      statusEl.textContent = `⚠️ ${err.message}`;
+    }
+  }
+
+  function parseRoots(text) {
+    return text.split('\n').map(l => l.trim().replace(/\\/g, '/')).filter(Boolean);
+  }
+
   // ── Settings Modal ────────────────────────────────────────
   function updatePomoPermissionUI() {
     const sel = $id('s-pomo-notification').value;
@@ -1841,6 +2060,8 @@ async function fetchEpicChildren(epicKey) {
     $id('s-gitlab-username').value     = settings.gitlab.username;
     $id('s-gitlab-token').value        = settings.gitlab.token;
     $id('s-pomo-notification').value   = (settings.pomo || {}).notification || 'browser';
+    $id('s-wt-roots').value            = ((settings.worktrees || {}).roots || []).join('\n');
+    $id('s-wt-scan').value             = (settings.worktrees || {}).scanParent || '';
     updatePomoPermissionUI();
     $id('settingsModal').classList.remove('hidden');
   }
@@ -1867,6 +2088,10 @@ async function fetchEpicChildren(epicKey) {
       },
       pomo: {
         notification: $id('s-pomo-notification').value,
+      },
+      worktrees: {
+        roots:      parseRoots($id('s-wt-roots').value),
+        scanParent: $id('s-wt-scan').value.trim().replace(/\\/g, '/'),
       },
     };
   }
@@ -1911,7 +2136,12 @@ async function fetchEpicChildren(epicKey) {
     loadJira();
     loadGitLab();
     loadEpicPanel();
+    loadWorktrees();
+  });
 
+  $id('s-wt-scan-btn').addEventListener('click', scanForRepos);
+  $id('s-wt-scan').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); scanForRepos(); }
   });
 
 
@@ -1958,7 +2188,8 @@ async function fetchEpicChildren(epicKey) {
   // Refresh buttons
   $id('refreshJira').addEventListener('click', loadJira);
   $id('refreshGitlab').addEventListener('click', loadGitLab);
-  $id('refreshAll').addEventListener('click', () => { loadJira(); loadGitLab(); });
+  $id('refreshWorktrees').addEventListener('click', loadWorktrees);
+  $id('refreshAll').addEventListener('click', () => { loadJira(); loadGitLab(); loadWorktrees(); });
 
   // IS mode toggle
   const isModeCb = $id('isSupportMode');
@@ -2018,7 +2249,13 @@ async function fetchEpicChildren(epicKey) {
   loadJira();
   loadGitLab();
   loadEpicPanel();
-  
+  loadWorktrees();
+  // Worktree state changes on the timescale of a git command, and the render order is
+  // stable, so polling this often can't shuffle items under the cursor.
+  setInterval(() => {
+    if (document.visibilityState === 'visible') loadWorktrees();
+  }, 10000);
+
   setupAutoRefresh();
   })();
 </script>

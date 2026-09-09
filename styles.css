@@ -146,6 +146,7 @@
     .section-icon.jira   { background: var(--jira-bg);   color: var(--jira-blue);    }
     .section-icon.gitlab { background: var(--gitlab-bg); color: var(--gitlab-orange);}
     .section-icon.local  { background: var(--local-bg);  color: var(--local-green);  }
+    .section-icon.worktree { background: rgba(167,139,250,0.12); color: #a78bfa; }
 
     .section-count {
       background: var(--surface2);
@@ -362,6 +363,25 @@
     .local-title { font-size: 13px; line-height: 1.4; word-break: break-word; }
     .local-date { font-size: 11px; color: var(--text-subtle); margin-top: 3px; }
 
+    /* ── Worktrees ── */
+    .worktree-item { cursor: default; }
+    .worktree-item:hover { background: var(--surface-hover); }
+
+    .worktree-commit {
+      font-size: 11px;
+      color: var(--text-subtle);
+      margin-top: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .worktree-error {
+      font-size: 11px;
+      color: var(--red);
+      margin-top: 4px;
+    }
+
     /* ── Settings Modal ── */
     .modal-overlay {
       position: fixed;
@@ -438,6 +458,7 @@
       padding: 8px 11px; color: var(--text); font-size: 13px;
       font-family: inherit; outline: none; transition: border-color 0.15s;
     }
+    textarea.form-input { resize: vertical; line-height: 1.5; font-family: 'SFMono-Regular', Consolas, monospace; }
     .form-input:focus { border-color: var(--jira-blue); }
     .form-input::placeholder { color: var(--text-subtle); }
     .form-hint { font-size: 11px; color: var(--text-subtle); margin-top: 4px; line-height: 1.45; }
