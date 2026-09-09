@@ -12,6 +12,7 @@ Endpoints proxied:
   GET /gitlab/mr-comments.md       — downloads open GitLab MR review comments as Markdown
   GET /worktrees?root=<p>&root=... — git worktree status for the given repo roots
   GET /worktrees/scan?parent=<p>   — subdirectories of <p> that look like git checkouts
+  GET /activity?days=<n>           — logged worktree activity signals
 """
 import http.server
 import urllib.request
@@ -26,6 +27,7 @@ import sys
 from fetch_mr_comments import build_markdown, get_file_context, paginate, api_get
 import jira_downloader
 import worktrees
+import activity
 
 PORT = 8080
 BIND = "127.0.0.1"
@@ -74,6 +76,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._list_worktrees(parsed)
         elif path == '/worktrees/scan':
             self._scan_repos(parsed)
+        elif path == '/activity':
+            self._activity_log(parsed)
         elif path.startswith('/proxy/jira/'):
             self._proxy_jira(parsed)
         elif path.startswith('/proxy/gitlab/'):
@@ -309,9 +313,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         roots = urllib.parse.parse_qs(parsed.query).get('root') or []
         try:
-            self._json_ok(worktrees.list_worktrees(roots))
+            data = worktrees.list_worktrees(roots)
         except Exception as exc:
             self._json_error(500, str(exc))
+            return
+
+        # Remember the roots so the activity poller keeps working with no browser attached
+        activity.remember_roots(roots)
+        self._json_ok(data)
 
     def _scan_repos(self, parsed):
         if not self._check_origin():
@@ -323,6 +332,21 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return
         try:
             self._json_ok({'repos': worktrees.scan_for_repos(parent)})
+        except Exception as exc:
+            self._json_error(500, str(exc))
+
+    def _activity_log(self, parsed):
+        if not self._check_origin():
+            return
+
+        raw = (urllib.parse.parse_qs(parsed.query).get('days') or ['1'])[0].strip()
+        try:
+            days = max(0, min(activity.RETENTION_DAYS, int(raw)))
+        except ValueError:
+            self._json_error(400, 'Invalid days parameter')
+            return
+        try:
+            self._json_ok({'records': activity.read_log(days), 'days': days})
         except Exception as exc:
             self._json_error(500, str(exc))
 
@@ -404,6 +428,9 @@ if __name__ == '__main__':
 
     # Threaded: a worktree scan shells out to git and must not block the dashboard
     server = http.server.ThreadingHTTPServer((BIND, PORT), ProxyHandler)
+
+    # Collect worktree activity whether or not the dashboard is open in a browser
+    activity.start()
     url = f'http://localhost:{PORT}'
     print(f'DevTodo  →  {url}')
     print('Press Ctrl+C to stop.\n')

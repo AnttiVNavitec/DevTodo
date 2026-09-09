@@ -3,7 +3,7 @@
 ## Run
 `serve.bat` → `http://localhost:8080` (Python server in `server.py`)
 Jira/GitLab calls are proxied through the server: `/proxy/jira/*`, `/proxy/gitlab/*`
-Git worktree state comes from the server too: `/worktrees`, `/worktrees/scan`
+Git worktree state comes from the server too: `/worktrees`, `/worktrees/scan`, `/activity`
 
 ## File layout
 - `index.html` — all HTML + all JS in one IIFE (no build step, no modules)
@@ -12,7 +12,9 @@ Git worktree state comes from the server too: `/worktrees`, `/worktrees/scan`
 - `fetch_mr_comments.py` — helper called by server.py
 - `jira_downloader.py` — helper called by server.py
 - `worktrees.py` — git worktree discovery (shells out to git, no repo-specific knowledge)
+- `activity.py` — background poller that logs worktree activity signals to `data/`
 - `PLAN-worktrees.md` — phased plan for the worktree / auto-time-tracking work
+- `data/` — gitignored. Activity log + remembered repo paths. **Real work data: never commit.**
 
 **Do not split the JS into modules.** The JS is a single IIFE; all state is shared via closure. Splitting would require globals or ES modules and isn't worth it at the current size. Python *is* split into modules — `server.py` stays a router.
 
@@ -60,6 +62,27 @@ summarySelection  Set<label> of checked rows in summary view
 ## Storage keys (all `devtodo_*`)
 `settings`, `todos`, `show_unassigned`, `time_entries`, `time_active`, `time_suggestions`, `epic`, `pomo_state`, `pomo_cycles`, `ctx_switches`
 
+## Activity logging (`activity.py`)
+Runs on a daemon thread started by `server.py`, independent of the browser, so it keeps
+collecting with no tab open. Phase 5 of `PLAN-worktrees.md` consumes it; the history
+cannot be backfilled, which is why it collects before anything reads it.
+
+- Polls every 60s. Appends to `data/activity.jsonl` **only when something changed**, plus a
+  heartbeat every 15 min so "nothing happened" is distinguishable from "poller was down".
+- Records carry a `why` list: `start`, `branch`, `commit`, `files`, `claude`, `heartbeat`,
+  `error` (a repo/worktree became unreadable), `gone` (stopped being reported).
+  `error`/`gone` exist so absence of records never has to mean "we couldn't look".
+- `files` fingerprints the staged/unstaged/untracked/conflicted **breakdown**, not just the
+  total — otherwise a bare `git add` would go unnoticed.
+- Claude activity comes from the newest `*.jsonl` mtime under
+  `~/.claude/projects/<mangled-path>/`, where mangling replaces `:` `/` `\` with `-` and
+  lowercases the drive letter. Each transcript dir is attributed to the **longest** matching
+  worktree, or `<repo>-worktree` sessions would be credited to `<repo>`. Undocumented
+  format — every failure path degrades to "no signal".
+- The repo list lives in browser localStorage, so the server remembers whatever roots it was
+  last asked about in `data/roots.json` and polls those. An empty list never overwrites it.
+- Retention is 14 days, pruned once a day, matching the dashboard's time entries.
+
 ## Conventions
 - XSS: always wrap user/external strings with `esc()` before innerHTML
 - No comments in code unless the why is non-obvious
@@ -69,6 +92,9 @@ summarySelection  Set<label> of checked rows in summary view
 - Context switch = `clockIn` called with a different label than `activeEntry.label`
 - Entries older than 14 days are pruned on startup (`pruneOldEntries`)
 - The 1-second interval calls both `renderTracker()` and `renderPomo()`
+- `worktrees._cache` is a single immutable `(key, ts, data)` tuple swapped in one
+  assignment. The server is threaded and the poller and dashboard both read it, so it must
+  never be updated field by field.
 - The worktree panel polls every 10s while the tab is visible. Its render order is fixed
   (repo name → main checkout first → worktree name) so a refresh never moves an item
   under the cursor.

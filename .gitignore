@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+
+# Local activity signals and remembered repo paths — real work data, never commit
+data/

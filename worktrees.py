@@ -20,7 +20,10 @@ MAX_PARALLEL = 8
 # Keep git from flashing a console window on Windows
 _NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
-_cache = {'key': None, 'ts': 0.0, 'data': None}
+# Single immutable (key, timestamp, data) snapshot. The dashboard and the activity
+# poller call in from different threads, so this is swapped in one assignment rather
+# than field by field — a reader must never see a new key alongside stale data.
+_cache = None
 
 
 def _git(cwd, *args):
@@ -197,13 +200,19 @@ def list_worktrees(roots):
     Returns {'repos': [...], 'errors': [...], 'cached': bool}. Repos are deduplicated
     by main-worktree path, so listing both a repo and one of its worktrees is harmless.
     """
+    global _cache
+
     roots = [r.strip() for r in (roots or []) if r and r.strip()]
     cache_key = tuple(path_key(r) for r in roots)
     now = time.monotonic()
-    if _cache['key'] == cache_key and now - _cache['ts'] < CACHE_TTL and _cache['data']:
-        data = dict(_cache['data'])
-        data['cached'] = True
-        return data
+
+    snapshot = _cache
+    if snapshot is not None:
+        key, ts, cached = snapshot
+        if key == cache_key and now - ts < CACHE_TTL:
+            data = dict(cached)
+            data['cached'] = True
+            return data
 
     repos, errors, seen = [], [], set()
 
@@ -235,7 +244,7 @@ def list_worktrees(roots):
 
     repos.sort(key=lambda r: r['name'].casefold())
     data = {'repos': repos, 'errors': errors, 'cached': False}
-    _cache.update(key=cache_key, ts=now, data=data)
+    _cache = (cache_key, now, data)
     return data
 
 

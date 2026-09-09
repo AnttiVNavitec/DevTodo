@@ -48,7 +48,7 @@ never constants.
 
 Each phase is independently useful and independently shippable.
 
-### Phase 1 — read-only worktree panel
+### Phase 1 — read-only worktree panel — **done**
 
 - Settings: list of repo roots (`settings.repos: string[]`). Auto-seed by scanning a
   configured parent dir for `.git`, but keep the list editable.
@@ -61,13 +61,12 @@ Each phase is independently useful and independently shippable.
 - Poll every 5–10 s, and only when the tab is visible. Per-second `git status` on these
   repos is not free.
 
-### Phase 2 — signal logger (no UI)
+### Phase 2 — signal logger (no UI) — **done**
 
-- Server-side poller writes an append-only log:
-  `{ts, repo, worktree, branch, headSha, dirtyCount, claudeLastActivity}`.
-- `claudeLastActivity` from the newest `.jsonl` mtime in the mangled transcript dir.
-- Own storage, own pruning (same 14-day horizon as time entries).
-- Ship this before the features that consume it.
+Implemented in `activity.py`; see CLAUDE.md for the record shape and the reasoning.
+Beyond the original sketch, it also records `error` and `gone` events, so a reader can
+never mistake "we could not observe this repo" for "nothing happened here" — that
+distinction matters for phase 5 and cannot be reconstructed later.
 
 ### Phase 3 — play button per worktree
 
