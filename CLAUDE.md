@@ -40,7 +40,7 @@ Grep for `// ── <name>` to jump directly. Sections in order:
 | `Time report modal` | `openTimeReport`, `renderTimeReport`, `renderLogView`, `renderSummaryView` |
 | `Jira` | `cacheJiraSummaries`, `fetchJiraSummary`, `jiraFetch`, `fetchMyJiraIssues`, `fetchSupportTickets`, `fetchEpicChildren`, `createEpicIssue`, `buildJiraItem`, `loadJira`, `loadEpicPanel` |
 | `Jira sorting` | `priorityOrder`, `jiraStatusTier`, `issueInActiveSprint`, sort comparators |
-| `GitLab` | `fetchGitLabMRs`, `buildGitLabItem`, `downloadMrComments`, `loadGitLab` |
+| `GitLab` | `fetchGitLabMRs`, `fetchMrReview`, `buildGitLabItem`, `downloadMrComments`, `loadGitLab` |
 | `MR ranking` | `mrRank` |
 | `Local Todos` | `renderTodos`, `addTodo` |
 | `Worktrees` | `ticketKeyOf`, `fmtAgo`, `worktreeLabel`/`worktreeLabelSync`, `isWorktreeActive`, `buildWorktreeItem`, `renderWorktrees`, `loadWorktrees`, `scanForRepos`, `parseRoots` |
@@ -163,6 +163,25 @@ that matter, all learned from running it against real data:
 Both `days` bucketing and coverage use `ts.slice(0, 10)`, i.e. **UTC** days, matching
 `entriesForDate()` and `todayStr()`. That's a pre-existing app-wide quirk; the gap finder
 matches it on purpose so gaps and entries line up.
+
+## MR review state — "has the reviewer said something new?"
+`fetchMrReview()` reads `/discussions` per MR and returns
+`{ unresolved, newCount, newAt, authors, isNew }`, stored on `mr._review`.
+
+- **The signal is turn-based, not a read-marker.** `isNew` means someone else's newest note
+  is newer than *my* newest note. Reading a comment does not answer it, so a badge that
+  cleared on visit would clear the thing you still owe a reply to. It clears when you reply
+  or the thread is resolved — nothing is persisted client-side.
+- **No note of my own → not new, unless the MR is mine** (author or assignee). Otherwise
+  every MR I merely review would light up, which the "Needs My Review" tier already says.
+- Skipped when `user_notes_count` is 0 — that's most MRs, one request each. Any failure
+  returns null and every consumer treats null as "no signal", so the panel never breaks
+  because discussions were unreadable.
+- System notes are filtered out; a thread counts as `unresolved` only if it has resolvable
+  notes and not all are resolved (same rule as `fetch_mr_comments.py`).
+- Surfaces as tier 2 **New Comments** (below Ready to Merge, which is a ten-second action)
+  plus a `💬 N new` badge and a `🧵 N` unresolved-thread count. Within that tier, newest
+  unanswered comment sorts first.
 
 ## Branch operations
 `gitops.py` holds a fixed operation table (`checkout`, `create`, `move`, `detach`,

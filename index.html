@@ -1620,22 +1620,81 @@ async function fetchEpicChildren(epicKey) {
 
     const mrs = [...map.values()];
 
-    // Fetch approval status per MR in parallel (global list API does not include this)
-    const approvalResults = await Promise.all(
-      mrs.map(mr =>
+    // Neither approval status nor discussion state is in the global list API
+    const perMr = await Promise.all(
+      mrs.map(mr => Promise.all([
         fetch(`/proxy/gitlab/api/v4/projects/${mr.project_id}/merge_requests/${mr.iid}/approvals`, { headers })
           .then(r => r.ok ? r.json() : null)
-          .catch(() => null)
-      )
+          .catch(() => null),
+        fetchMrReview(mr, headers, username).catch(() => null),
+      ]))
     );
     for (let i = 0; i < mrs.length; i++) {
-      const result = approvalResults[i];
+      const [result, review] = perMr[i];
       if (result?.approved_by?.length > 0) mrs[i].approved = true;
       // Track whether the current user personally approved this MR
       mrs[i]._iApproved = result?.approved_by?.some(e => e.user?.username === username) ?? false;
+      mrs[i]._review = review;
     }
 
     return mrs;
+  }
+
+  /** Review state of one MR: how many threads are open, and whether anyone has said
+   *  something since I last spoke.
+   *
+   *  GitLab exposes no per-user unread flag, so the signal is turn-based rather than a
+   *  read-marker: a note from someone else, newer than my newest note, means the ball is
+   *  back in my court. That is deliberately not "have I looked at it" — reading a review
+   *  comment does not answer it, so the badge must survive a visit and only clear when I
+   *  actually reply or the thread is resolved.
+   *
+   *  Skipped entirely when `user_notes_count` is 0, which is most MRs and one request each.
+   *  Any failure returns null, and every consumer treats null as "no signal". */
+  async function fetchMrReview(mr, headers, username) {
+    if (!mr.user_notes_count) return null;
+    const resp = await fetch(
+      `/proxy/gitlab/api/v4/projects/${mr.project_id}/merge_requests/${mr.iid}/discussions?per_page=100`,
+      { headers });
+    if (!resp.ok) return null;
+    const discussions = await resp.json();
+    if (!Array.isArray(discussions)) return null;
+
+    let unresolved = 0;
+    let mineAt = 0;
+    const others = [];
+
+    for (const disc of discussions) {
+      // System notes ("changed this line in version 3 of the diff") are not review input
+      const notes = (disc.notes || []).filter(n => !n.system);
+      if (!notes.length) continue;
+
+      // A thread with no resolvable notes is a plain comment, never "open"
+      const resolvable = notes.filter(n => n.resolvable);
+      if (resolvable.length && !resolvable.every(n => n.resolved)) unresolved++;
+
+      for (const n of notes) {
+        const at = new Date(n.created_at).getTime();
+        if (!at) continue;
+        if (n.author?.username === username) mineAt = Math.max(mineAt, at);
+        else others.push({ at, author: n.author?.username || '?' });
+      }
+    }
+
+    const newer = others.filter(o => o.at > mineAt);
+    // With no note of my own there is no turn to be back in — unless the MR is mine, in
+    // which case every review comment is unanswered. Otherwise every MR I merely review
+    // would light up as "new", which "Needs My Review" already says.
+    const isMine = mr.author?.username === username || mr._roles.includes('assignee');
+    const isNew  = newer.length > 0 && (mineAt > 0 || isMine);
+
+    return {
+      unresolved,
+      newCount: newer.length,
+      newAt:    newer.reduce((m, o) => Math.max(m, o.at), 0),
+      authors:  [...new Set(newer.map(o => o.author))],
+      isNew,
+    };
   }
 
   function discombobulateName(name) {
@@ -1669,6 +1728,14 @@ async function fetchEpicChildren(epicKey) {
                          '<span class="mr-role mr-role-reviewer">Reviewer</span>'
     ).join('');
 
+    const rv = mr._review;
+    const newBadge = rv?.isNew
+      ? `<span class="badge badge-purple" title="${esc(`New from ${rv.authors.map(a => '@' + a).join(', ')} — ${fmtAgo(rv.newAt / 1000)}`)}">\ud83d\udcac ${rv.newCount} new</span>`
+      : '';
+    const threadBadge = rv?.unresolved
+      ? `<span class="badge badge-gray" title="Unresolved review threads">\ud83e\uddf5 ${rv.unresolved}</span>`
+      : '';
+
     const downloadButton =mr._roles.map( r => r == 'assignee' ? `<button class="btn btn-sm btn-export-comments" title="Download review comments as Markdown">Comments</button>` : '').join('');
     const nameParts = discombobulateName(mr.title);
     const a = document.createElement('a');
@@ -1683,6 +1750,8 @@ async function fetchEpicChildren(epicKey) {
         <div class="item-title" title="${esc(mr.title)}">${esc(nameParts[0])}</div>
         <div class="item-meta">
           <span class="item-key" title="${esc(projectPath)}">!${mr.iid} ${esc(projectName)} ⎇ ${esc(nameParts[1])}</span>
+          ${newBadge}
+          ${threadBadge}
           ${isDraft ? '<span class="badge badge-gray">Draft</span>' : ''}
           ${mr.approved ? '<span class="badge badge-green">Approved</span>' : ''}
           ${roleHtml}
@@ -1757,19 +1826,24 @@ async function fetchEpicChildren(epicKey) {
 
   // ── MR ranking ───────────────────────────────────────────
   // Tier 1: assigned to me + approved  → ready to merge (highest)
-  // Tier 2: I'm reviewer, haven't approved yet → needs my review
-  // Tier 3: assigned to me, not yet approved  → waiting for reviewers
-  // Tier 4: I'm reviewer and already approved → done (lowest)
+  // Tier 2: someone commented since I last spoke → my turn to answer
+  // Tier 3: I'm reviewer, haven't approved yet → needs my review
+  // Tier 4: assigned to me, not yet approved  → waiting for reviewers
+  // Tier 5: I'm reviewer and already approved → done (lowest)
+  //
+  // Ready-to-merge stays above new comments: it is a ten-second action, and an approved
+  // MR rarely has an open thread anyway.
   function mrRank(mr) {
     const isAssignee = mr._roles.includes('assignee');
     const isReviewer = mr._roles.includes('reviewer');
     const approved   = !!mr.approved;
     const iApproved  = !!mr._iApproved;
     if (isAssignee && approved)          return 1;
-    if (isReviewer && !iApproved)        return 2;
-    if (isAssignee)                      return 3;
-    if (isReviewer && iApproved)         return 4;
-    return 5; // author-only fallback
+    if (mr._review?.isNew)               return 2;
+    if (isReviewer && !iApproved)        return 3;
+    if (isAssignee)                      return 4;
+    if (isReviewer && iApproved)         return 5;
+    return 6; // author-only fallback
   }
 
   async function loadGitLab() {
@@ -1805,15 +1879,17 @@ async function fetchEpicChildren(epicKey) {
       } else {
         const TIER_LABELS = {
           1: 'Ready to Merge',
-          2: 'Needs My Review',
-          3: 'Awaiting Review',
-          4: 'Already Reviewed',
-          5: 'Other',
+          2: 'New Comments',
+          3: 'Needs My Review',
+          4: 'Awaiting Review',
+          5: 'Already Reviewed',
+          6: 'Other',
         };
         // Primary: tier rank. Secondary: newest updated_at first (stale/inactive MRs sink — LRU-style)
         const sorted = [...mrs].sort((a, b) => {
           const ra = mrRank(a), rb = mrRank(b);
           if (ra !== rb) return ra - rb;
+          if (a._review?.isNew && b._review?.isNew) return b._review.newAt - a._review.newAt;
           return new Date(b.updated_at) - new Date(a.updated_at);
         });
         const tierCounts = {};
