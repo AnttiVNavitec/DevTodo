@@ -1838,11 +1838,15 @@ async function fetchEpicChildren(epicKey) {
     const isReviewer = mr._roles.includes('reviewer');
     const approved   = !!mr.approved;
     const iApproved  = !!mr._iApproved;
-    if (isAssignee && approved)          return 1;
-    if (mr._review?.isNew)               return 2;
-    if (isReviewer && !iApproved)        return 3;
-    if (isAssignee)                      return 4;
-    if (isReviewer && iApproved)         return 5;
+    if (isAssignee && approved)                 return 1;
+    // An MR I have already approved stays at the bottom even when there is new discussion
+    // on it — that is the author's turn, not mine. Checked before the new-comments tier
+    // precisely so a reply cannot drag a finished review back to the top. The 💬 badge
+    // still shows, so it is visible down there.
+    if (isReviewer && iApproved && !isAssignee) return 5;
+    if (mr._review?.isNew)                      return 2;
+    if (isReviewer && !iApproved)               return 3;
+    if (isAssignee)                             return 4;
     return 6; // author-only fallback
   }
 
