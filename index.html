@@ -1151,6 +1151,15 @@
     return m ? m[1] : null;
   }
 
+  /** Matching only. `jiraKeyFromLabel` stays anchored because it gates actions; this one
+   *  just answers "is this the same piece of work", where the key can sit anywhere — an MR
+   *  label is `!5074 repo: TROL-1: Merge …`, and the ticket is what makes it the same work
+   *  as the branch. A false positive costs nothing here. */
+  function labelTicketKey(label) {
+    const m = /\b([A-Z][A-Z0-9]+)-(\d+)\b/.exec(label || '');
+    return m ? `${m[1]}-${m[2]}` : null;
+  }
+
   async function downloadJiraTicket(key) {
     const { url, email, token } = settings.jira;
     const auth = btoa(`${email}:${token}`);
@@ -2042,12 +2051,17 @@ async function fetchEpicChildren(epicKey) {
   }
 
   /** True when the running timer belongs to this worktree. Matching on the ticket key means
-   *  clocking in from the Jira panel also lights up the worktree the branch lives in. */
+   *  clocking in from the Jira panel — or from the MR for that ticket — also lights up the
+   *  worktree the branch lives in. The MR's `source_branch` is the second route: it catches
+   *  MRs whose title carries no ticket key at all. */
   function isWorktreeActive(wt) {
     if (!activeEntry) return false;
+    if (activeEntry.label === worktreeLabelSync(wt)) return true;
     const key = ticketKeyOf(wt.branch);
-    if (key) return jiraKeyFromLabel(activeEntry.label) === key;
-    return activeEntry.label === worktreeLabelSync(wt);
+    if (key && labelTicketKey(activeEntry.label) === key) return true;
+    const mr = mrBranches.get(wt.branch);
+    if (mr && activeEntry.label.startsWith(`!${mr.iid} `)) return true;
+    return false;
   }
 
   function buildWorktreeItem(wt) {
