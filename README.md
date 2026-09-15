@@ -66,6 +66,18 @@ Each repository heading also has a button to bring its default branch up to date
 
 Every one of these refuses to touch a worktree with uncommitted changes, or one where Claude was active in the last couple of minutes — pulling a branch out from under a running agent produces confident nonsense. Dialogs show the exact git commands before running them, and when git objects you get its own words, not a paraphrase. Merging, rebasing and pushing are deliberately absent: those belong in a terminal.
 
+## Work context: folders and notes
+
+Code lives in the repository, but everything else about a ticket — the build you sent someone, the log file from the reproduction, the thing you worked out at 16:50 and would have forgotten by morning — has nowhere to go. Set a **context folder** in Settings → Context and it does.
+
+**A folder per work item.** The 🗄 button on the tracker bar and on each worktree row opens that item's folder in Explorer, creating it the first time. Folders are named after the ticket key, so editing a ticket's summary never orphans what you filed under it.
+
+**Collecting files out of a worktree.** Define collect rules once — a name, some globs relative to the worktree, and where they should land. The 📦 button on the tracker bar then lists them and copies on click: build output, logs, generated reports. Tick *stamp* and each run goes into its own `2026-09-15_1432` folder, so successive builds stack up instead of overwriting one another and you can still hand someone last Tuesday's binary. Matches keep their path relative to the worktree, so two files of the same name in different folders don't collide. A rule that suddenly matches a thousand files is refused rather than run — that is a bad glob, not an intention.
+
+**Notes.** The 📝 button on the tracker bar writes a note tagged with whatever you are tracking, filed under today. The header's **Notes** button browses them: a day at a time, a search box across every day, and clicking any note's tag shows every note ever written about that ticket.
+
+They are stored as plain Markdown, one file per day, inside `_notes/` in the context folder — so they are readable and editable in any editor, and a day's notes read as a day's narrative rather than a pile of records. Notes are deliberately *not* copied into the per-ticket folders: the day file is the only copy, and the per-ticket view is a search over those files. Two copies would disagree the first time you edited one. Unlike the rest of the app, notes are filed by local date, because a note written at 23:00 on Tuesday belongs to Tuesday.
+
 ## Forgetting to clock in
 
 The most common way to lose hours is to start working without starting the timer. DevTODO attacks this from both ends.

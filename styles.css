@@ -376,6 +376,19 @@
     /* Keep the play button visible on the tracked row, not just on hover */
     .worktree-tracking .item-actions { opacity: 1; }
 
+    /* A worktree row carries up to seven actions. Fading them out still reserved their
+       width, which left nothing for the branch name, so the strip collapses to zero until
+       the row is hovered — or is the tracked one, which keeps its actions out. */
+    .worktree-item .item-actions {
+      max-width: 0;
+      overflow: hidden;
+      gap: 2px;
+      transition: max-width 0.12s ease, opacity 0.1s;
+    }
+    .worktree-item:hover .item-actions,
+    .worktree-tracking .item-actions { max-width: 260px; }
+    .worktree-item .btn-action { padding: 3px 5px; }
+
     .worktree-commit {
       font-size: 11px;
       color: var(--text-subtle);
@@ -893,7 +906,171 @@
     .report-stat strong { color: var(--text); }
     .report-stat-warn strong { color: var(--yellow); }
 
+    /* ── Collect rules (settings) ── */
+    .ctx-rule {
+      display: grid;
+      grid-template-columns: 1fr 2fr 1fr auto auto;
+      gap: 6px;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .ctx-rule .form-input { font-size: 12px; padding: 6px 8px; }
+    .ctx-rule .checkbox-label { font-size: 11px; white-space: nowrap; }
+    .ctx-rule-head {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-subtle);
+      margin-bottom: 4px;
+    }
+
+    /* ── Collect dialog ── */
+    .collect-list {
+      margin-top: 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+    .collect-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .collect-row:last-child { border-bottom: none; }
+    .collect-main { flex: 1; min-width: 0; }
+    .collect-name { font-size: 12px; font-weight: 600; }
+    .collect-detail {
+      font-size: 11px;
+      color: var(--text-subtle);
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      margin-top: 3px;
+      word-break: break-all;
+    }
+    .collect-result {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 4px;
+      word-break: break-all;
+    }
+    .collect-result:empty { display: none; }
+    .collect-result.ok { color: var(--local-green); }
+    .collect-result.error { color: var(--red); }
+
+    /* ── Notes ── */
+    .note-compose {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 14px;
+    }
+    .note-compose-row { display: flex; gap: 6px; align-items: center; }
+    .note-compose-row .form-input { flex: 1; font-size: 12px; padding: 6px 8px; }
+    .note-compose-row .btn { white-space: nowrap; }
+    .note-text-input {
+      resize: vertical;
+      font-family: inherit;
+      line-height: 1.5;
+    }
+
+    .notes-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+    }
+    .notes-search { max-width: 220px; font-size: 12px; padding: 6px 8px; }
+
+    .note-filter {
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .note-list {
+      margin-top: 10px;
+      max-height: 46vh;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+    .note-day-head {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-subtle);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin: 12px 0 4px;
+    }
+    .note-day-head:first-child { margin-top: 0; }
+
+    .note-row {
+      display: flex;
+      gap: 10px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .note-row:last-child { border-bottom: none; }
+    .note-when {
+      font-size: 11px;
+      color: var(--text-subtle);
+      font-variant-numeric: tabular-nums;
+      padding-top: 2px;
+      min-width: 38px;
+    }
+    .note-main { flex: 1; min-width: 0; }
+    .note-tag {
+      display: inline-block;
+      max-width: 100%;
+      border: 1px solid var(--border-light);
+      background: var(--jira-bg);
+      color: var(--jira-blue);
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-size: 10px;
+      cursor: pointer;
+      margin-bottom: 4px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .note-tag:hover { background: rgba(38,132,255,0.22); }
+    .note-text {
+      font-size: 13px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .note-days {
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--text-subtle);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      flex-wrap: wrap;
+    }
+    .note-day {
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text-muted);
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: 11px;
+      cursor: pointer;
+      font-variant-numeric: tabular-nums;
+    }
+    .note-day:hover { background: var(--surface-hover); color: var(--text); }
+    .note-day.active { border-color: var(--jira-blue); color: var(--jira-blue); }
+
     @media (max-width: 640px) {
+      .ctx-rule { grid-template-columns: 1fr auto; }
       .report-summary-actions { align-items: stretch; }
       .report-summary-actions .btn { flex: 1; justify-content: center; }
       .report-copy-feedback { width: 100%; }

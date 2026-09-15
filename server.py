@@ -16,6 +16,11 @@ Endpoints proxied:
   POST /worktree/open              — {tool, path}: open a tool in a known worktree
   GET  /worktree/branches?path=<p>  — local/remote branches and the repo's base branch
   POST /worktree/git               — {operation, params}: branch and worktree operations
+  GET  /context?base=<p>           — work-item folders under the context base
+  GET  /context/notes?base=<p>&…   — notes for one day, or a search across days
+  POST /context/folder             — {base, name, tool?}: create the folder, optionally open it
+  POST /context/collect            — {base, name, source, rule}: copy files out of a worktree
+  POST /context/note               — {base, text, tag}: append a note to today's file
 """
 import http.server
 import urllib.request
@@ -33,6 +38,7 @@ import worktrees
 import activity
 import spawn
 import gitops
+import context
 
 PORT = 8080
 BIND = "127.0.0.1"
@@ -59,6 +65,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._open_worktree_tool()
         elif parsed.path == '/worktree/git':
             self._worktree_git()
+        elif parsed.path == '/context/folder':
+            self._context_folder()
+        elif parsed.path == '/context/collect':
+            self._context_collect()
+        elif parsed.path == '/context/note':
+            self._context_note()
         else:
             self.send_error(404)
 
@@ -89,6 +101,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._activity_log(parsed)
         elif path == '/worktree/branches':
             self._worktree_branches(parsed)
+        elif path == '/context':
+            self._context_list(parsed)
+        elif path == '/context/notes':
+            self._context_notes(parsed)
         elif path.startswith('/proxy/jira/'):
             self._proxy_jira(parsed)
         elif path.startswith('/proxy/gitlab/'):
@@ -395,20 +411,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._json_error(400, 'Missing path')
             return
 
-        # The path has to be one git itself reports as a worktree of a remembered root.
-        # Membership, not a prefix test — a prefix would let any subdirectory through.
-        try:
-            known = worktrees.list_worktrees(activity.load_roots())
-        except Exception as exc:
-            self._json_error(500, str(exc))
-            return
-
-        allowed = {
-            worktrees.path_key(wt['path'])
-            for repo in known['repos'] for wt in repo['worktrees']
-        }
-        if worktrees.path_key(path) not in allowed:
-            self._json_error(403, 'Not a known worktree directory')
+        if not self._is_known_worktree(path):
             return
 
         try:
@@ -424,6 +427,28 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return
 
         self._json_ok({'ok': True, 'tool': tool, 'name': name, 'path': path})
+
+    def _is_known_worktree(self, path):
+        """
+        True when git itself reports `path` as a worktree of a remembered root.
+
+        Membership, not a prefix test — a prefix would let any subdirectory through.
+        Writes the error response itself, so a caller just returns on False.
+        """
+        try:
+            known = worktrees.list_worktrees(activity.load_roots())
+        except Exception as exc:
+            self._json_error(500, str(exc))
+            return False
+
+        allowed = {
+            worktrees.path_key(wt['path'])
+            for repo in known['repos'] for wt in repo['worktrees']
+        }
+        if worktrees.path_key(path) not in allowed:
+            self._json_error(403, 'Not a known worktree directory')
+            return False
+        return True
 
     def _worktree_branches(self, parsed):
         if not self._check_origin():
@@ -469,6 +494,133 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._json_error(422, exc.stderr or 'git failed')
         except Exception as exc:
             self._json_error(500, str(exc))
+
+    # ── Work context: folders, collected files, notes ─────────────────────────
+    def _body(self):
+        """Parsed JSON request body, or None after answering with 400."""
+        length = int(self.headers.get('Content-Length', 0) or 0)
+        try:
+            payload = json.loads(self.rfile.read(length) or b'{}')
+        except ValueError:
+            self._json_error(400, 'Body must be JSON')
+            return None
+        if not isinstance(payload, dict):
+            self._json_error(400, 'Body must be a JSON object')
+            return None
+        return payload
+
+    def _context_list(self, parsed):
+        if not self._check_origin():
+            return
+        base = (urllib.parse.parse_qs(parsed.query).get('base') or [''])[0]
+        try:
+            self._json_ok(context.list_contexts(base))
+        except Exception as exc:
+            self._json_error(500, str(exc))
+
+    def _context_notes(self, parsed):
+        if not self._check_origin():
+            return
+        query = urllib.parse.parse_qs(parsed.query)
+        base = (query.get('base') or [''])[0]
+        date = (query.get('date') or [''])[0].strip()
+        text = (query.get('q') or [''])[0].strip()
+        tag = (query.get('tag') or [''])[0].strip()
+        try:
+            if date and not text and not tag:
+                notes = context.read_day(base, date)
+            else:
+                notes = context.search_notes(base, text, tag)
+            self._json_ok({'notes': notes, 'days': context.note_days(base)})
+        except context.Invalid as exc:
+            self._json_error(400, str(exc))
+        except Exception as exc:
+            self._json_error(500, str(exc))
+
+    def _context_folder(self):
+        # Creates a directory and may start a process: same strict origin rule as the rest
+        if not self._require_dashboard_origin():
+            return
+        payload = self._body()
+        if payload is None:
+            return
+
+        base = str(payload.get('base') or '')
+        name = str(payload.get('name') or '')
+        tool = str(payload.get('tool') or '').strip()
+        if tool and tool not in spawn.TOOLS:
+            self._json_error(400, f'Unknown tool: {tool}')
+            return
+
+        try:
+            path, created = context.context_path(base, name, create=True)
+        except context.Invalid as exc:
+            self._json_error(400, str(exc))
+            return
+        except OSError as exc:
+            self._json_error(500, f'Could not create the folder: {exc}')
+            return
+
+        opened = None
+        if tool:
+            try:
+                opened = spawn.open_in(tool, path)
+            except spawn.ToolMissing as exc:
+                self._json_error(404, str(exc))
+                return
+            except Exception as exc:
+                self._json_error(500, f'Could not launch: {exc}')
+                return
+
+        self._json_ok({'path': path.replace('\\', '/'), 'created': created, 'opened': opened})
+
+    def _context_collect(self):
+        if not self._require_dashboard_origin():
+            return
+        payload = self._body()
+        if payload is None:
+            return
+
+        source = str(payload.get('source') or '').strip()
+        rule = payload.get('rule')
+        if not isinstance(rule, dict):
+            self._json_error(400, 'rule must be an object')
+            return
+        if not source:
+            self._json_error(400, 'Missing source worktree')
+            return
+        if not self._is_known_worktree(source):
+            return
+
+        try:
+            result = context.collect(
+                str(payload.get('base') or ''), str(payload.get('name') or ''), source, rule)
+        except context.Invalid as exc:
+            self._json_error(400, str(exc))
+            return
+        except OSError as exc:
+            self._json_error(500, f'Copy failed: {exc}')
+            return
+        self._json_ok(result)
+
+    def _context_note(self):
+        if not self._require_dashboard_origin():
+            return
+        payload = self._body()
+        if payload is None:
+            return
+        try:
+            note = context.append_note(
+                str(payload.get('base') or ''),
+                str(payload.get('text') or ''),
+                str(payload.get('tag') or ''))
+        except context.Invalid as exc:
+            self._json_error(400, str(exc))
+            return
+        except OSError as exc:
+            self._json_error(500, f'Could not write the note: {exc}')
+            return
+        self._json_ok(note)
 
     # ── HTTP forwarding ───────────────────────────────────────────────────────
     def _forward(self, url, headers, method='GET', body=None):

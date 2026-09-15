@@ -41,6 +41,14 @@
       </svg>
       Time
     </button>
+    <button class="btn btn-icon" id="openNotes" title="Notes">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M4 4a2 2 0 0 1 2-2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/>
+        <path d="M14 2v6h6"/>
+        <path d="M8 13h8M8 17h5"/>
+      </svg>
+      Notes
+    </button>
     <button class="btn btn-icon" id="openSettings">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <circle cx="12" cy="12" r="3"/>
@@ -194,6 +202,7 @@
         <button class="modal-tab" data-tab="gitlab">GitLab</button>
         <button class="modal-tab" data-tab="pomo">Pomodoro</button>
         <button class="modal-tab" data-tab="worktrees">Worktrees</button>
+        <button class="modal-tab" data-tab="context">Context</button>
       </div>
 
       <!-- Jira tab -->
@@ -301,6 +310,25 @@
           </div>
         </div>
       </div>
+
+      <!-- Context tab -->
+      <div class="tab-content" id="tab-context">
+        <div class="form-group">
+          <label class="form-label" for="s-ctx-base">Context folder</label>
+          <input class="form-input" id="s-ctx-base" spellcheck="false" placeholder="C:/work/context">
+          <div class="form-hint">One folder per work item is created inside this, named after the ticket. Notes live in <code>_notes/</code> as one Markdown file per day.</div>
+        </div>
+        <div class="form-section">
+          <div class="form-section-title">Collect rules</div>
+          <div class="form-hint" style="margin-bottom:8px">Each rule copies files out of the worktree you are working in and into that item's context folder — build output, logs, whatever you want to keep. Patterns are relative to the worktree; <code>**</code> matches any depth.</div>
+          <div class="ctx-rule ctx-rule-head">
+            <span>Name</span><span>Patterns (comma separated)</span><span>Into</span><span></span><span></span>
+          </div>
+          <div id="s-ctx-rules"></div>
+          <button class="btn btn-sm" id="s-ctx-add" style="margin-top:8px">+ Add rule</button>
+          <div class="form-hint" style="margin-top:8px"><strong>stamp</strong> puts each run in its own <code>YYYY-MM-DD_HHMM</code> folder, so successive builds stack up instead of overwriting each other.</div>
+        </div>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn" id="cancelSettings">Cancel</button>
@@ -334,6 +362,19 @@
       <button class="btn" id="cancelOtherWork">Cancel</button>
       <button class="btn btn-primary" id="submitOtherWork">▶ Start</button>
     </div>
+  </div>
+</div>
+
+<!-- ── Notes modal ──
+     Sits before the git operation modal on purpose: same z-index, so DOM order decides
+     what covers what, and a dialog opened from here has to land on top. -->
+<div class="modal-overlay hidden" id="notesModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="notesTitle" style="max-width:680px">
+    <div class="modal-header">
+      <div class="modal-title" id="notesTitle">Notes</div>
+      <button class="modal-close" id="closeNotes" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body" id="notesBody"></div>
   </div>
 </div>
 
@@ -388,6 +429,7 @@
     gitlab: { url: 'https://gitlab.com', username: '', token: '' },
     pomo:   { notification: 'browser' },
     worktrees: { roots: [], scanParent: '', structural: 'release/*' },
+    context: { base: '', rules: [] },
   };
 
   // ── State ─────────────────────────────────────────────────
@@ -413,6 +455,12 @@
   let gapDismissed   = loadJson(KEY_GAP_DISMISS, {});     // gap id → true
   let activityRecords = [];         // last /activity response, read by the time report
   let mrBranches = new Map();       // source branch → MR, so branch pickers can offer them
+  let notesDate  = localDateStr();  // which local day the notes browser is showing
+  let notesQuery = '';              // free-text filter; non-empty switches to searching all days
+  let notesTag   = '';              // tag filter, usually a ticket key
+  let notesData  = { notes: [], days: [] };   // last /context/notes response
+  let notesError = '';
+  let notesSearchTimer = null;      // debounce handle for the notes search box
 
   // ── Helpers ───────────────────────────────────────────────
   function loadSettings() {
@@ -425,6 +473,7 @@
         gitlab: { ...deepClone(DEFAULT.gitlab), ...parsed.gitlab },
         pomo:   { ...deepClone(DEFAULT.pomo),   ...parsed.pomo   },
         worktrees: { ...deepClone(DEFAULT.worktrees), ...parsed.worktrees },
+        context:   { ...deepClone(DEFAULT.context),   ...parsed.context },
       };
     } catch { return deepClone(DEFAULT); }
   }
@@ -456,6 +505,26 @@
   }
 
   function $id(id) { return document.getElementById(id); }
+
+  /** POST JSON, returning the parsed body and turning a non-2xx into the server's own
+   *  message — those are written to be shown to the user. */
+  async function apiPost(url, body) {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || `Request failed (${resp.status})`);
+    return data;
+  }
+
+  /** YYYY-MM-DD in *local* time. Notes are filed by local day — see the Work context
+   *  section — while the rest of the app buckets by UTC via todayStr(). */
+  function localDateStr(date = new Date()) {
+    const pad = n => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  }
 
   function getCalendarWeek(date = new Date()) {
     // Copy date so we don't modify original
@@ -2845,6 +2914,35 @@ async function fetchEpicChildren(epicKey) {
       run: ctx => runGitOp('detach', { path: ctx.worktree.path }).then(loadWorktrees),
     },
     {
+      // A filing cabinet rather than a folder: this opens the *context* folder, and next
+      // to it on the same row sits 📁, which opens the worktree. Two folder glyphs there
+      // were indistinguishable.
+      id: 'contextFolder', icon: '🗄', label: 'Context',
+      title: "Open this item's context folder, creating it if it doesn't exist",
+      surfaces: ['tracker'],
+      applies: ctx => !!contextName(ctx) && contextConfigured(),
+      run: ctx => openContextFolder(ctx),
+    },
+    {
+      id: 'contextNote', icon: '📝', label: 'Note',
+      title: 'Write a note tagged with what you are working on',
+      surfaces: ['tracker'],
+      applies: () => contextConfigured(),
+      run: ctx => openNoteDialog(ctx.label),
+    },
+    {
+      id: 'contextCollect', icon: '📦', label: 'Collect',
+      title: 'Copy build output or logs from this worktree into the context folder',
+      // Tracker only: worktree rows are already crowded, and collecting is something you
+      // do for the thing you are working on.
+      surfaces: ['tracker'],
+      // Nothing to offer until there are rules to run — the button would only ever open
+      // an empty dialog that says "configure this in Settings".
+      applies: ctx => !!ctx.worktree && !!contextName(ctx) && contextRules().length > 0
+        && contextConfigured(),
+      run: ctx => openCollectDialog(ctx),
+    },
+    {
       id: 'explorer', icon: '📁', label: 'Explorer',
       title: 'Open this worktree in File Explorer',
       surfaces: ['tracker', 'worktree'],
@@ -2864,14 +2962,7 @@ async function fetchEpicChildren(epicKey) {
       surfaces: ['tracker', 'worktree'],
       applies: ctx => !!ctx.worktree,
       run: ctx => openWorktreeTool('vscode', ctx.worktree.path),
-    },
-    {
-      id: 'claude', icon: '✳', label: 'Claude',
-      title: 'Start Claude Code in this worktree',
-      surfaces: ['tracker', 'worktree'],
-      applies: ctx => !!ctx.worktree,
-      run: ctx => openWorktreeTool('claude', ctx.worktree.path),
-    },
+    }
   ];
 
   async function openWorktreeTool(tool, path) {
@@ -2950,6 +3041,401 @@ async function fetchEpicChildren(epicKey) {
       frag.appendChild(btn);
     });
     return frag;
+  }
+
+  // ── Work context: folders, collected files & notes ────────
+  // Everything about a work item that isn't code: its own folder on disk, build output
+  // collected out of a worktree, and dated notes.
+  //
+  // Folders are named by ticket key wherever there is one, so a folder never orphans
+  // itself when a summary is edited. Notes deliberately do *not* live in those folders —
+  // the server appends them to one Markdown file per day and the per-ticket view is a
+  // filter over those files. See context.py for why one source of truth matters here.
+
+  function contextBase()  { return (settings.context || {}).base || ''; }
+  function contextRules() { return (settings.context || {}).rules || []; }
+
+  /** true, or the reason an action can't run — the three-way `applies` contract. */
+  function contextConfigured() {
+    return contextBase() ? true : 'Set a context folder in Settings → Context';
+  }
+
+  /** Folder name for a context: the ticket key when there is one, else a slug of the
+   *  label. Null when there is nothing to name a folder after. Mirrors the server's
+   *  `safe_segment`, so a name this produces is one the server will accept. */
+  function contextName(ctx) {
+    if (!ctx) return null;
+    if (ctx.jiraKey) return ctx.jiraKey;
+    const slug = String(ctx.label || '')
+      .replace(/[^A-Za-z0-9._ -]+/g, ' ')
+      .replace(/^[^A-Za-z0-9]+/, '')
+      .trim()
+      .replace(/\s+/g, '-')
+      .slice(0, 60)
+      .replace(/[.\s-]+$/, '');
+    return slug || null;
+  }
+
+  function openContextFolder(ctx) {
+    return apiPost('/context/folder', {
+      base: contextBase(), name: contextName(ctx), tool: 'explorer',
+    });
+  }
+
+  // ── Collecting files into a context folder ────────────────
+  /** Where a rule will put things, as markup — the placeholder is the one part that is
+   *  deliberately not escaped. */
+  function ruleTarget(rule, name) {
+    const dest = esc(rule.dest ? `${name}/${rule.dest}` : name);
+    return rule.stamp ? `${dest}/&lt;timestamp&gt;` : dest;
+  }
+
+  function openCollectDialog(ctx) {
+    const name = contextName(ctx);
+    const { body, footer } = openOpModal(`Collect into ${name}`);
+
+    body.innerHTML = `
+      <div class="form-hint">Copied out of <code>${esc(ctx.worktree.path)}</code>.
+        Rules live in Settings → Context.</div>
+      <div class="collect-list" id="collectList"></div>`;
+
+    const list = $id('collectList');
+    contextRules().forEach(rule => {
+      const row = document.createElement('div');
+      row.className = 'collect-row';
+      row.innerHTML = `
+        <div class="collect-main">
+          <div class="collect-name">${esc(rule.name || 'Unnamed rule')}</div>
+          <div class="collect-detail">${esc((rule.patterns || []).join(', '))}
+            → ${ruleTarget(rule, name)}</div>
+          <div class="collect-result"></div>
+        </div>`;
+
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-sm btn-primary';
+      btn.textContent = 'Collect';
+      btn.addEventListener('click', async () => {
+        const result = row.querySelector('.collect-result');
+        btn.disabled = true;
+        btn.textContent = '…';
+        result.className = 'collect-result';
+        result.textContent = '';
+        try {
+          const data = await apiPost('/context/collect', {
+            base: contextBase(), name, source: ctx.worktree.path, rule,
+          });
+          result.textContent = data.copied.length
+            ? `✓ ${data.copied.length} file${data.copied.length === 1 ? '' : 's'} `
+              + `(${fmtBytes(data.bytes)}) → ${data.dest}`
+            : data.message || 'Nothing matched.';
+          result.className = `collect-result${data.copied.length ? ' ok' : ''}`;
+        } catch (err) {
+          result.textContent = `⚠️ ${err.message}`;
+          result.className = 'collect-result error';
+        } finally {
+          btn.disabled = false;
+          btn.textContent = 'Collect';
+        }
+      });
+
+      row.appendChild(btn);
+      list.appendChild(row);
+    });
+
+    const open = document.createElement('button');
+    open.className = 'btn';
+    open.textContent = '🗄 Open folder';
+    open.addEventListener('click', () => openContextFolder(ctx).catch(err => alert(err.message)));
+
+    const close = document.createElement('button');
+    close.className = 'btn';
+    close.textContent = 'Close';
+    close.addEventListener('click', closeOpModal);
+
+    footer.appendChild(open);
+    footer.appendChild(Object.assign(document.createElement('div'), { style: 'flex:1' }));
+    footer.appendChild(close);
+  }
+
+  function fmtBytes(bytes) {
+    if (!bytes) return '0 B';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    return `${(bytes / 1048576).toFixed(1)} MB`;
+  }
+
+  // ── Notes ─────────────────────────────────────────────────
+  /** The one-note dialog, opened from the tracker bar. The notes browser has its own
+   *  composer — this one exists so capturing a thought never means opening a browser
+   *  and losing your place in it. */
+  function openNoteDialog(tag) {
+    const { body, footer } = openOpModal('New note');
+    const key = labelTicketKey(tag);
+    body.innerHTML = `
+      <div class="form-group">
+        <label class="form-label" for="quickNoteTag">Tagged</label>
+        <input class="form-input" id="quickNoteTag" value="${esc(tag || '')}"
+               placeholder="e.g. TROL-123: Fix the thing">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="quickNoteText">Note</label>
+        <textarea class="form-input note-text-input" id="quickNoteText" rows="7"
+                  placeholder="What did you find out?"></textarea>
+        <div class="form-hint">Filed under today in
+          <code>_notes/${esc(localDateStr())}.md</code>. Ctrl+Enter saves.</div>
+      </div>`;
+
+    const save = document.createElement('button');
+    save.className = 'btn btn-primary';
+    save.textContent = 'Save note';
+
+    const submit = async () => {
+      const text = $id('quickNoteText').value.trim();
+      if (!text) return;
+      save.disabled = true;
+      save.textContent = '…';
+      try {
+        await saveNote(text, $id('quickNoteTag').value.trim());
+        closeOpModal();
+      } catch (err) {
+        alert(err.message);
+        save.disabled = false;
+        save.textContent = 'Save note';
+      }
+    };
+
+    save.addEventListener('click', submit);
+    $id('quickNoteText').addEventListener('keydown', e => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); }
+    });
+
+    const cancel = document.createElement('button');
+    cancel.className = 'btn';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', closeOpModal);
+
+    if (key) {
+      const earlier = document.createElement('button');
+      earlier.className = 'btn';
+      earlier.textContent = `📓 Earlier notes on ${key}`;
+      earlier.addEventListener('click', () => { closeOpModal(); openNotes(key); });
+      footer.appendChild(earlier);
+    }
+    footer.appendChild(Object.assign(document.createElement('div'), { style: 'flex:1' }));
+    footer.appendChild(cancel);
+    footer.appendChild(save);
+    setTimeout(() => $id('quickNoteText').focus(), 50);
+  }
+
+  async function saveNote(text, tag) {
+    const note = await apiPost('/context/note', { base: contextBase(), text, tag });
+    // Show the note that was just written, whatever was being browsed before
+    notesQuery = '';
+    notesTag   = '';
+    notesDate  = note.date;
+    if (!$id('notesModal').classList.contains('hidden')) loadNotes();
+    return note;
+  }
+
+  function openNotes(tag) {
+    notesTag   = tag || '';
+    notesQuery = '';
+    notesDate  = localDateStr();
+    notesError = '';
+    notesData  = { notes: [], days: [] };
+    // The body survives a close, so drafts from last time would otherwise be carried in
+    $id('notesBody').innerHTML = '';
+    $id('notesModal').classList.remove('hidden');
+    renderNotes();
+    loadNotes();
+  }
+
+  function closeNotes() { $id('notesModal').classList.add('hidden'); }
+
+  async function loadNotes() {
+    if (!contextBase()) {
+      notesData = { notes: [], days: [] };
+      notesError = '';
+      renderNotes();
+      return;
+    }
+    const params = new URLSearchParams({ base: contextBase() });
+    if (notesQuery) params.set('q', notesQuery);
+    if (notesTag)   params.set('tag', notesTag);
+    if (!notesQuery && !notesTag) params.set('date', notesDate);
+
+    try {
+      const resp = await fetch(`/context/notes?${params}`);
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data.error || `Could not read notes (${resp.status})`);
+      notesData  = { notes: data.notes || [], days: data.days || [] };
+      notesError = '';
+    } catch (err) {
+      notesData  = { notes: [], days: [] };
+      notesError = err.message;
+    }
+    renderNotes();
+  }
+
+  function noteDayLabel(date) {
+    return new Date(date + 'T12:00:00').toLocaleDateString('en-US', {
+      weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
+    });
+  }
+
+  function renderNotes() {
+    const body = $id('notesBody');
+    if (!body) return;
+
+    // The whole panel is rebuilt on every load, so anything half-typed has to be carried
+    // across — losing a draft note to a background refresh would be unforgivable.
+    const draft   = $id('noteText') ? $id('noteText').value : '';
+    const tagDraft = $id('noteTagInput') ? $id('noteTagInput').value : null;
+    const focused = document.activeElement && document.activeElement.id;
+    const caret   = focused === 'notesSearch' ? document.activeElement.selectionStart : null;
+
+    const searching = !!(notesQuery || notesTag);
+    const tracked   = activeEntry ? activeEntry.label : '';
+    const isToday   = notesDate >= localDateStr();
+
+    body.innerHTML = `
+      ${contextBase() ? '' : `<div class="config-needed">⚙️ Set a context folder in Settings → Context
+        <p>Notes are stored inside it as one Markdown file per day.</p></div>`}
+      <div class="note-compose">
+        <textarea class="form-input note-text-input" id="noteText" rows="3"
+                  placeholder="Write a note… Ctrl+Enter to save"></textarea>
+        <div class="note-compose-row">
+          <input class="form-input" id="noteTagInput" value="${esc(tagDraft ?? tracked)}"
+                 placeholder="Tag — e.g. TROL-123: Fix the thing">
+          <button class="btn btn-primary btn-sm" id="noteAddBtn">＋ Add note</button>
+        </div>
+      </div>
+      <div class="notes-toolbar">
+        <button class="btn btn-sm btn-icon" id="notesPrev" ${searching ? 'disabled' : ''}>‹</button>
+        <span class="report-date-label">${searching ? 'Search results' : esc(noteDayLabel(notesDate))}</span>
+        <button class="btn btn-sm btn-icon" id="notesNext" ${searching || isToday ? 'disabled' : ''}>›</button>
+        <div style="flex:1"></div>
+        <input class="form-input notes-search" id="notesSearch" type="search"
+               placeholder="Search every note…" value="${esc(notesQuery)}">
+      </div>
+      ${notesTag ? `<div class="note-filter">Tagged <strong>${esc(notesTag)}</strong>
+        <button class="btn btn-sm" id="notesClearTag">✕ clear</button></div>` : ''}
+      ${notesError ? `<div class="error-state">⚠️ ${esc(notesError)}</div>` : ''}
+      <div class="note-list" id="noteList"></div>
+      ${notesData.days.length ? `<div class="note-days">Days with notes:
+        ${notesData.days.slice(0, 14).map(d =>
+          `<button class="note-day${!searching && d === notesDate ? ' active' : ''}" data-date="${esc(d)}">${esc(d.slice(5))}</button>`).join('')}
+      </div>` : ''}`;
+
+    $id('noteText').value = draft;
+    renderNoteList();
+
+    $id('noteAddBtn').addEventListener('click', addNoteFromComposer);
+    $id('noteText').addEventListener('keydown', e => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); addNoteFromComposer(); }
+    });
+
+    $id('notesPrev').addEventListener('click', () => shiftNotesDay(-1));
+    $id('notesNext').addEventListener('click', () => shiftNotesDay(1));
+
+    const search = $id('notesSearch');
+    search.addEventListener('input', () => {
+      clearTimeout(notesSearchTimer);
+      notesSearchTimer = setTimeout(() => {
+        notesQuery = search.value.trim();
+        loadNotes();
+      }, 250);
+    });
+
+    if ($id('notesClearTag')) {
+      $id('notesClearTag').addEventListener('click', () => { notesTag = ''; loadNotes(); });
+    }
+
+    body.querySelectorAll('.note-day').forEach(btn => {
+      btn.addEventListener('click', () => {
+        notesDate  = btn.dataset.date;
+        notesQuery = '';
+        notesTag   = '';
+        loadNotes();
+      });
+    });
+
+    if (focused === 'notesSearch') {
+      search.focus();
+      search.setSelectionRange(caret, caret);
+    } else if (focused === 'noteText') {
+      $id('noteText').focus();
+    }
+  }
+
+  function renderNoteList() {
+    const list = $id('noteList');
+    if (!list) return;
+    const searching = !!(notesQuery || notesTag);
+
+    if (!notesData.notes.length) {
+      list.innerHTML = `<div class="report-empty">${
+        searching ? 'No note matches that.' : 'No notes on this day.'}</div>`;
+      return;
+    }
+
+    list.innerHTML = '';
+    let day = null;
+    notesData.notes.forEach(note => {
+      if (searching && note.date !== day) {
+        day = note.date;
+        const head = document.createElement('div');
+        head.className = 'note-day-head';
+        head.textContent = noteDayLabel(day);
+        list.appendChild(head);
+      }
+
+      const row = document.createElement('div');
+      row.className = 'note-row';
+      row.innerHTML = `
+        <div class="note-when">${esc(note.time)}</div>
+        <div class="note-main">
+          ${note.tag ? `<button class="note-tag" title="Show every note tagged with this">${esc(note.tag)}</button>` : ''}
+          <div class="note-text">${esc(note.text)}</div>
+        </div>`;
+
+      const tagBtn = row.querySelector('.note-tag');
+      if (tagBtn) {
+        // Filter by the ticket key rather than the whole tag: the summary in a tag is
+        // whatever it was the day the note was written, and it changes.
+        tagBtn.addEventListener('click', () => {
+          notesTag   = labelTicketKey(note.tag) || note.tag;
+          notesQuery = '';
+          loadNotes();
+        });
+      }
+      list.appendChild(row);
+    });
+  }
+
+  function shiftNotesDay(delta) {
+    const d = new Date(notesDate + 'T12:00:00');
+    d.setDate(d.getDate() + delta);
+    notesDate = localDateStr(d);
+    loadNotes();
+  }
+
+  async function addNoteFromComposer() {
+    const box  = $id('noteText');
+    const text = box.value.trim();
+    if (!text) return;
+    $id('noteAddBtn').disabled = true;
+    // Cleared before saving, not after: saving re-renders the panel, and the render
+    // carries whatever is in the box across.
+    box.value = '';
+    try {
+      await saveNote(text, $id('noteTagInput').value.trim());
+    } catch (err) {
+      if ($id('noteText')) $id('noteText').value = text;
+      alert(err.message);
+    } finally {
+      if ($id('noteAddBtn')) $id('noteAddBtn').disabled = false;
+    }
   }
 
   // ── Nudges & gaps ─────────────────────────────────────────
@@ -3278,6 +3764,38 @@ async function fetchEpicChildren(epicKey) {
     }
   }
 
+  /** One editable collect rule. Rows are the state — `collectRuleRows` reads them back
+   *  when the settings are saved, so nothing has to be kept in sync while editing. */
+  function buildRuleRow(rule) {
+    rule = rule || {};
+    const row = document.createElement('div');
+    row.className = 'ctx-rule';
+    row.innerHTML = `
+      <input class="form-input ctx-rule-name" placeholder="Build output"
+             value="${esc(rule.name || '')}">
+      <input class="form-input ctx-rule-patterns" spellcheck="false"
+             placeholder="bin/Release/**/*.exe, bin/Release/**/*.dll"
+             value="${esc((rule.patterns || []).join(', '))}">
+      <input class="form-input ctx-rule-dest" spellcheck="false" placeholder="builds"
+             value="${esc(rule.dest || '')}">
+      <label class="checkbox-label" title="Copy into a new timestamped folder each run">
+        <input type="checkbox" class="ctx-rule-stamp" ${rule.stamp ? 'checked' : ''}> stamp
+      </label>
+      <button class="btn btn-sm btn-danger ctx-rule-del" title="Remove this rule">✕</button>`;
+    row.querySelector('.ctx-rule-del').addEventListener('click', () => row.remove());
+    return row;
+  }
+
+  function collectRuleRows() {
+    return [...document.querySelectorAll('#s-ctx-rules .ctx-rule')].map(row => ({
+      name:     row.querySelector('.ctx-rule-name').value.trim(),
+      patterns: row.querySelector('.ctx-rule-patterns').value
+                  .split(/[,\n]/).map(p => p.trim()).filter(Boolean),
+      dest:     row.querySelector('.ctx-rule-dest').value.trim(),
+      stamp:    row.querySelector('.ctx-rule-stamp').checked,
+    })).filter(rule => rule.patterns.length);   // a rule with no pattern can't do anything
+  }
+
   function openSettings() {
     $id('s-jira-url').value            = settings.jira.url;
     $id('s-jira-email').value          = settings.jira.email;
@@ -3293,6 +3811,10 @@ async function fetchEpicChildren(epicKey) {
     $id('s-wt-roots').value            = ((settings.worktrees || {}).roots || []).join('\n');
     $id('s-wt-scan').value             = (settings.worktrees || {}).scanParent || '';
     $id('s-wt-structural').value       = (settings.worktrees || {}).structural || 'release/*';
+    $id('s-ctx-base').value            = contextBase();
+    const rules = $id('s-ctx-rules');
+    rules.innerHTML = '';
+    contextRules().forEach(rule => rules.appendChild(buildRuleRow(rule)));
     updatePomoPermissionUI();
     $id('settingsModal').classList.remove('hidden');
   }
@@ -3325,6 +3847,10 @@ async function fetchEpicChildren(epicKey) {
         scanParent: $id('s-wt-scan').value.trim().replace(/\\/g, '/'),
         structural: $id('s-wt-structural').value.trim(),
       },
+      context: {
+        base:  $id('s-ctx-base').value.trim().replace(/\\/g, '/'),
+        rules: collectRuleRows(),
+      },
     };
   }
 
@@ -3345,6 +3871,16 @@ async function fetchEpicChildren(epicKey) {
   $id('closeTimeReport').addEventListener('click', closeTimeReport);
   $id('timeReportModal').addEventListener('click', e => {
     if (e.target === $id('timeReportModal')) closeTimeReport();
+  });
+
+  $id('openNotes').addEventListener('click', () => openNotes());
+  $id('closeNotes').addEventListener('click', closeNotes);
+  $id('notesModal').addEventListener('click', e => {
+    if (e.target === $id('notesModal')) closeNotes();
+  });
+
+  $id('s-ctx-add').addEventListener('click', () => {
+    $id('s-ctx-rules').appendChild(buildRuleRow());
   });
 
   $id('closeOtherWork').addEventListener('click', closeOtherWork);
@@ -3462,7 +3998,9 @@ async function fetchEpicChildren(epicKey) {
 
   // Escape closes modal
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { closeSettings(); closeOtherWork(); closeTimeReport(); closeOpModal(); }
+    if (e.key === 'Escape') {
+      closeSettings(); closeOtherWork(); closeTimeReport(); closeOpModal(); closeNotes();
+    }
   });
 
   // ── Init ──────────────────────────────────────────────────

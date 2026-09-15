@@ -6,6 +6,9 @@ Jira/GitLab calls are proxied through the server: `/proxy/jira/*`, `/proxy/gitla
 Git worktree state comes from the server too: `/worktrees`, `/worktrees/scan`, `/activity`
 Tool launching: `POST /worktree/open` `{tool, path}`
 Branch ops: `GET /worktree/branches?path=`, `POST /worktree/git` `{operation, params}`
+Work context: `GET /context?base=`, `GET /context/notes?base=&date=|&q=&tag=`,
+`POST /context/folder` `{base, name, tool?}`, `POST /context/collect` `{base, name, source, rule}`,
+`POST /context/note` `{base, text, tag}`
 
 ## File layout
 - `index.html` — all HTML + all JS in one IIFE (no build step, no modules)
@@ -17,6 +20,7 @@ Branch ops: `GET /worktree/branches?path=`, `POST /worktree/git` `{operation, pa
 - `activity.py` — background poller that logs worktree activity signals to `data/`
 - `spawn.py` — launches external tools (Explorer, Git Bash, VS Code, Claude…) in a worktree
 - `gitops.py` — mutating git operations with server-enforced guards
+- `context.py` — per-work-item folders, collected build artifacts, and dated notes on disk
 - `transcripts.py` — Claude-transcript probe; a leaf module so worktrees.py and activity.py
   can both use it without importing each other
 - `PLAN-worktrees.md` — phased plan for the worktree / auto-time-tracking work
@@ -47,16 +51,17 @@ Grep for `// ── <name>` to jump directly. Sections in order:
 | `Nudges & gaps` | `trackWorktreeChanges`, `pendingNudges`, `renderNudges`, `loadActivity`, `findGaps`, `subtractCovered`, `mergedCoverage`, `acceptGap`, `renderReportGaps` |
 | `Branch operations` | `buildBranchCandidates`, `branchPlan`, `worktreeBlockReason`, `openBranchDialog`, `openCreateBranchDialog`, `openAddWorktreeDialog`, `runGitOp`, `performOp` |
 | `Contextual actions` | `ACTIONS` registry, `openWorktreeTool`, `trackedContext`, `worktreeContext`, `findTrackedWorktree`, `renderContextActions` |
+| `Work context` | `contextBase`/`contextRules`/`contextName`, `openContextFolder`, `openCollectDialog`, `openNoteDialog`, `saveNote`, `openNotes`, `loadNotes`, `renderNotes`, `renderNoteList` |
 | `Settings Modal` | `openSettings`, `closeSettings`, `collectSettings` |
 | `Event wiring` | All `addEventListener` calls |
 | `Init` | Startup sequence |
 
 ## CSS sections in styles.css
-Same pattern, grep for `/* ── <name>`. Key sections: `Pomodoro bar`, `Tracker bar`, `Time report`, `Summary view`, `Day stats in time report`, `Worktrees`.
+Same pattern, grep for `/* ── <name>`. Key sections: `Pomodoro bar`, `Tracker bar`, `Time report`, `Summary view`, `Day stats in time report`, `Worktrees`, `Collect rules (settings)`, `Collect dialog`, `Notes`.
 
 ## Key shared state vars
 ```
-settings          loaded from localStorage, shape: { jira, gitlab, pomo, worktrees }
+settings          loaded from localStorage, shape: { jira, gitlab, pomo, worktrees, context }
 activeEntry       null | { id, label, type, startedAt, endedAt:null } — the running timer
 timeEntries       completed entries array
 timeSuggestions   autocomplete history for "Other work"
@@ -70,6 +75,10 @@ jiraSummaries     Map<issueKey, summary> — warmed by loadJira/loadEpicPanel
 worktreeChanges   Map<path, {fp, at}> — when each worktree last changed (drives nudges)
 activityRecords   last /activity response, read by the gap finder
 worktreeData      last /worktrees response; renderWorktrees() reads it without refetching
+notesDate         YYYY-MM-DD (local!) day the notes browser is showing
+notesQuery        free-text notes filter; non-empty switches from one day to all days
+notesTag          tag filter, usually a ticket key
+notesData         last /context/notes response: { notes, days }
 ```
 
 ## Storage keys (all `devtodo_*`)
@@ -113,8 +122,8 @@ buttons into either place.
   declares what it needs. `trackedContext()` resolves the worktree via
   `isWorktreeActive`, so it is found by ticket key, not by path.
 - `run(ctx)` may do anything — **these are not all program launchers.** Current actions
-  download a file, open a URL, and start processes. Branch checkout / branch creation are
-  the next ones and will open a dialog from `run`.
+  download a file, open a URL, start processes, open dialogs (branch ops, collect, note)
+  and create folders.
 - The tracker bar renders `icon + label`; worktree rows render `icon` only, since row
   actions are hover-revealed and space is tight.
 - `renderTracker()` runs every second and rebuilds these buttons each time, so actions
@@ -222,12 +231,60 @@ box pre-fills with the tracked ticket key, which usually narrows to one.
 gates labels. A false positive here is harmless (it just won't be in `jiraSummaries`),
 and real branches are sometimes lower-cased.
 
+## Work context — folders & notes
+Everything about a work item that isn't code. `context.py` owns the disk layout; the
+client sends the base folder on every call, exactly the way repo roots work — the setting
+lives in localStorage and the server only validates it.
+
+```
+<base>/TROL-123/                       one folder per work item, created on demand
+<base>/TROL-123/builds/2026-09-15_1432/…   whatever a collect rule copied in
+<base>/_notes/2026-09-15.md            one Markdown file per local day, append-only
+```
+
+- **Folders are named by ticket key** wherever `contextName()` finds one, never by summary:
+  a summary gets edited and the folder would orphan itself. No key → a slug of the label.
+  `contextName()` mirrors the server's `safe_segment()`, so a name it produces is one the
+  server accepts; the server validates anyway, since the UI is only an affordance.
+- **Every written path is a validated segment joined to the base and re-checked with
+  `commonpath`.** `safe_segment` is *not* applied to collected file names — it would reject
+  ordinary build artifacts over a character class — so containment is what protects that
+  path, not the name.
+- `base_dir(create=True)` creates the base but **never its parent**: a typo should fail
+  loudly rather than quietly build a tree somewhere unexpected.
+- Collect matches **keep their path relative to the worktree**, so a glob catching two
+  files of the same name in different folders doesn't silently drop one. A run over
+  `MAX_COLLECT_FILES`/`MAX_COLLECT_BYTES` is refused — that is a bad glob, not an intention.
+- `POST /context/collect` only accepts a source git itself reports as a worktree
+  (`_is_known_worktree`, shared with `/worktree/open`). All three POST routes require the
+  strict `Origin` check: they create directories, copy files and start processes.
+
+### Notes
+- **One file per day is the only copy.** The per-ticket view is a *filter* over the day
+  files (tag substring), not a second set of files. Two copies would disagree the first
+  time anyone edited one in an editor — and these are meant to be edited in an editor.
+- The format is plain Markdown so it reads outside the app: `## HH:MM · <tag>` then the
+  body. Parsing back is forgiving — anything before the first heading is ignored, and a
+  body line that looks like a heading is written with a leading `\` (markdown's own
+  escape, so it renders identically) or it would split the note on the way back in.
+- **Notes are filed by *local* day and time**, deliberately diverging from the app-wide UTC
+  bucketing (`todayStr()`, the gap finder, `entriesForDate`). A note file is a human
+  artifact; one written at 23:00 on Tuesday belongs to Tuesday. `localDateStr()` is the
+  client-side counterpart — don't "fix" it to `todayStr()`.
+- The tag is stored verbatim (`KEY: summary`), but **filtering matches a substring**, so a
+  ticket key finds every note tagged with it whatever the summary was that day. Clicking a
+  tag filters by `labelTicketKey(tag) || tag` for the same reason.
+- `renderNotes()` rebuilds the whole panel, so the composer draft and the search caret are
+  carried across explicitly. Losing a half-typed note to a background refresh is the one
+  bug this feature cannot afford.
+
 ## Conventions
 - XSS: always wrap user/external strings with `esc()` before innerHTML
 - No comments in code unless the why is non-obvious
 - No TypeScript, no build tooling
 - `fmtDuration(ms)` → `"1h 05m"` / `"45m"` — use for all time display
-- `todayStr()` → `"YYYY-MM-DD"` — use for date comparisons
+- `todayStr()` → `"YYYY-MM-DD"` (UTC) — use for date comparisons everywhere except notes,
+  which use `localDateStr()`; see Work context for why that divergence is deliberate
 - Context switch = `clockIn` called with a different label than `activeEntry.label`
 - **Track labels are `"KEY: summary"`.** The Jira panel, the epic panel and the worktree
   panel all build labels this way on purpose, so time clocked on the same ticket from any
