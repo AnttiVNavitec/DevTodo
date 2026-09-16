@@ -3498,6 +3498,7 @@ async function fetchEpicChildren(epicKey) {
     const now = Date.now();
     const out = [];
     worktreeData.repos.forEach(repo => (repo.worktrees || []).forEach(wt => {
+      if (wt.detached) return;                          // no branch to name the task after
       const change = worktreeChanges.get(wt.path);
       if (!change || !change.at) return;
       if (now - change.at > NUDGE_WINDOW_MS) return;
